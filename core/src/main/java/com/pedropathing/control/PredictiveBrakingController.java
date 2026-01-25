@@ -44,7 +44,7 @@ public class PredictiveBrakingController {
         double outputPower =
             coefficients.P * (error - computeBrakingDisplacement(velocity, directionOfMotion));
         
-        return clampReversePower(outputPower, directionOfMotion);
+        return outputPower;
     }
     
     public double computeBrakingDisplacement(double velocity, double directionOfMotion) {
