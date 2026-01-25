@@ -2,10 +2,16 @@ package com.pedropathing.paths;
 
 import com.pedropathing.geometry.Pose;
 import com.pedropathing.math.Vector;
+import com.pedropathing.paths.callbacks.ParametricCallback;
 import com.pedropathing.paths.callbacks.PathCallback;
+import com.pedropathing.paths.callbacks.TemporalCallback;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Queue;
 
 /**
  * This is the PathChain class. This class handles chaining together multiple Paths into a larger
@@ -28,11 +34,13 @@ public class PathChain {
         GLOBAL,
         LAST_PATH
     }
+
     private DecelerationType decelerationType = DecelerationType.LAST_PATH;
     private ArrayList<PathCallback> callbacks = new ArrayList<>();
     public HeadingInterpolator headingInterpolator = null;
     private Double closestPointHeadingGoal;
     private Double finalHeadingGoal;
+    private int currentCallbackIndex = 0;
 
     /**
      * This creates a new PathChain from some specified Paths.
@@ -127,6 +135,16 @@ public class PathChain {
      * @param callbacks the ArrayList of PathCallbacks.
      */
     public void setCallbacks(ArrayList<PathCallback> callbacks) {
+        Comparator<PathCallback> callbackComparator = (pathCallback, other) -> {
+            if (pathCallback.getPathIndex() != other.getPathIndex())
+                return Integer.compare(pathCallback.getPathIndex(), other.getPathIndex());
+            if (pathCallback instanceof ParametricCallback && other instanceof ParametricCallback)
+                return Double.compare(((ParametricCallback) pathCallback).getStartCondition(), ((ParametricCallback) other).getStartCondition());
+            if (pathCallback instanceof TemporalCallback && other instanceof TemporalCallback)
+                return Double.compare(((TemporalCallback) pathCallback).getStartCondition(), ((TemporalCallback) other).getStartCondition());
+            return 0;
+        };
+        Collections.sort(callbacks, callbackComparator);
         this.callbacks = callbacks;
     }
 
@@ -144,6 +162,7 @@ public class PathChain {
      */
 
     public void resetCallbacks() {
+        currentCallbackIndex = 0;
         for (PathCallback callback : callbacks) {
             callback.reset();
         }
@@ -390,7 +409,59 @@ public class PathChain {
         return finalHeadingGoal;
     }
 
+    public double getDistanceRemaining(PathT completion) {
+        double remainingLength = 0;
+
+        if (completion.pathIndex < size()) {
+            for (int i = completion.pathIndex + 1; i < size(); i++) {
+                remainingLength += getPath(i).length();
+            }
+        }
+
+        return remainingLength + getPath(completion.pathIndex).getDistanceRemaining(completion.t);
+    }
+
+    public double getDistanceRemaining(int chainIndex) {
+        double remainingLength = 0;
+
+        if (chainIndex < size()) {
+            for (int i = chainIndex + 1; i < size(); i++) {
+                remainingLength += getPath(i).length();
+            }
+        }
+
+        return remainingLength + getPath(chainIndex).getDistanceRemaining();
+    }
+
     public void update() {
         closestPointHeadingGoal = null;
+    }
+
+    public Queue<PathCallback> getNextPathCallbacks(int chainIndex) {
+        Queue<PathCallback> nextCallbacks = new ArrayDeque<>();
+        if (callbacks.isEmpty() || currentCallbackIndex >= callbacks.size()) return nextCallbacks;
+        int lastIndex = getLastCallbackIndex();
+
+        if (chainIndex > lastIndex + 1)
+            while (currentCallbackIndex < callbacks.size() &&
+                    callbacks.get(currentCallbackIndex).getPathIndex() < chainIndex)
+                currentCallbackIndex++;
+        else if (chainIndex < lastIndex + 1)
+            while (currentCallbackIndex > 0 &&
+                    callbacks.get(currentCallbackIndex - 1).getPathIndex() >= chainIndex)
+                currentCallbackIndex--;
+
+        while (currentCallbackIndex < callbacks.size() &&
+                callbacks.get(currentCallbackIndex).getPathIndex() == lastIndex + 1) {
+            nextCallbacks.add(callbacks.get(currentCallbackIndex));
+            currentCallbackIndex++;
+        }
+
+        return nextCallbacks;
+    }
+
+    private int getLastCallbackIndex() {
+        if (currentCallbackIndex == 0) return 0;
+        return callbacks.get(currentCallbackIndex).getPathIndex() - 1;
     }
 }

@@ -1,7 +1,6 @@
 package com.pedropathing.geometry;
 import com.pedropathing.math.MathFunctions;
 import com.pedropathing.math.Matrix;
-import com.pedropathing.math.MatrixUtil;
 import com.pedropathing.math.Vector;
 import com.pedropathing.paths.PathConstraints;
 import static com.pedropathing.math.AbstractBijectiveMap.NumericBijectiveMap;
@@ -29,6 +28,8 @@ public class BezierCurve implements Curve {
     protected ArrayList<FuturePose> futureControlPoints = new ArrayList<>();
 
     protected boolean initialized = false;
+
+    protected boolean lazyInitialize = false;
 
     private Vector endTangent = new Vector();
 
@@ -81,7 +82,7 @@ public class BezierCurve implements Curve {
             throw new IllegalArgumentException("Too few control points");
         }
 
-        boolean lazyInitialize = false;
+        lazyInitialize = false;
         ArrayList<Pose> initializedControlPoints = new ArrayList<>();
         for (FuturePose pose : controlPoints) {
             if (!pose.initialized()) {
@@ -130,7 +131,7 @@ public class BezierCurve implements Curve {
      * This handles most of the initialization of the BezierCurve that is called from the constructor.
      */
     public void initialize() {
-        if (initialized) return; // If already initialized, do nothing
+        if (initialized && !lazyInitialize) return; // If already initialized, do nothing
         if (controlPoints.isEmpty() && !futureControlPoints.isEmpty()) {
             for (FuturePose pose : futureControlPoints) {
                 controlPoints.add(pose.getPose());
@@ -611,7 +612,6 @@ public class BezierCurve implements Curve {
      * Generates a BezierCurve that passes through the given points
      * @param points vararg of points; requirements more than two points
      * @return the BezierCurve passing through the points
-     * @author William Phomphakdee - 7462 Not to Scale Alumni
      */
     public static BezierCurve through(Pose... points){
         double[] tValues = new double[points.length];
@@ -634,7 +634,7 @@ public class BezierCurve implements Curve {
             targetPointMatrix.setRow(i, points[i].getX(), points[i].getY());
         }
 
-        Matrix outputControlPoints = Matrix.rref(tMatrix.multiply(bezier), MatrixUtil.eye(points.length))[1].multiply(targetPointMatrix);
+        Matrix outputControlPoints = Matrix.rref(tMatrix.multiply(bezier), Matrix.identity(points.length))[1].multiply(targetPointMatrix);
         Pose[] output = new Pose[points.length];
 
         for (int i = 0; i < outputControlPoints.getRows(); i++) {

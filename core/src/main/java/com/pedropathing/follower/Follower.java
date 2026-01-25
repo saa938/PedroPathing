@@ -4,7 +4,9 @@ import com.pedropathing.ErrorCalculator;
 import com.pedropathing.VectorCalculator;
 import com.pedropathing.control.FilteredPIDFCoefficients;
 import com.pedropathing.control.PIDFCoefficients;
-import com.pedropathing.Drivetrain;
+import com.pedropathing.control.PredictiveBrakingCoefficients;
+import com.pedropathing.control.PredictiveBrakingController;
+import com.pedropathing.drivetrain.Drivetrain;
 import com.pedropathing.paths.PathConstraints;
 import com.pedropathing.paths.PathPoint;
 import com.pedropathing.util.PoseHistory;
@@ -21,6 +23,9 @@ import com.pedropathing.paths.PathChain;
 import com.pedropathing.math.Vector;
 import com.pedropathing.util.Timer;
 
+import java.util.ArrayDeque;
+import java.util.Queue;
+
 /**
  * This is the Follower class. It handles the actual following of the paths and all the on-the-fly
  * calculations that are relevant for movement.
@@ -33,6 +38,7 @@ import com.pedropathing.util.Timer;
  */
 public class Follower {
     public FollowerConstants constants;
+    public PredictiveBrakingCoefficients coefficients;
     public PathConstraints pathConstraints;
     public PoseTracker poseTracker;
     public ErrorCalculator errorCalculator;
@@ -58,8 +64,10 @@ public class Follower {
     public boolean useCentripetal = true;
     public boolean useHeading = true;
     public boolean useDrive = true;
+    public boolean usePredictiveBraking = true;
     private Timer zeroVelocityDetectedTimer = null;
     private Runnable resetFollowing = null;
+    private Queue<PathCallback> currentCallbacks;
 
     /**
      * This creates a new Follower given a HardwareMap.
@@ -84,6 +92,7 @@ public class Follower {
         centripetalScaling = constants.centripetalScaling;
         turnHeadingErrorThreshold = constants.turnHeadingErrorThreshold;
         automaticHoldEnd = constants.automaticHoldEnd;
+        usePredictiveBraking = constants.usePredictiveBraking;
 
         breakFollowing();
     }
@@ -95,6 +104,7 @@ public class Follower {
         this.centripetalScaling = constants.centripetalScaling;
         this.turnHeadingErrorThreshold = constants.turnHeadingErrorThreshold;
         this.automaticHoldEnd = constants.automaticHoldEnd;
+        this.usePredictiveBraking = constants.usePredictiveBraking;
     }
 
     /**
@@ -141,6 +151,30 @@ public class Follower {
      */
     public void setPose(Pose pose) {
         poseTracker.setPose(pose);
+    }
+
+    /**
+     * This sets the current x-position estimate of the localizer. Units are inferred from localizer constants where necessary.
+     * @param x the x-position estimate to set
+     */
+    public void setX(double x) {
+        poseTracker.getLocalizer().setX(x);
+    }
+
+    /**
+     * This sets the current y-position estimate of the localizer. Units are inferred from localizer constants where necessary.
+     * @param y the y-position estimate to set
+     */
+    public void setY(double y) {
+        poseTracker.getLocalizer().setY(y);
+    }
+
+    /**
+     * This sets the current heading estimate of the localizer, in radians.
+     * @param heading the heading estimate to set
+     */
+    public void setHeading(double heading) {
+        poseTracker.getLocalizer().setHeading(heading);
     }
 
     /**
@@ -206,6 +240,15 @@ public class Follower {
      */
     public void holdPoint(Pose pose) {
         holdPoint(new BezierPoint(pose), pose.getHeading());
+    }
+
+    /**
+     * This holds a Point.
+     *
+     * @param pose the Point (as a Pose) to stay at.
+     */
+    public void holdPoint(Pose pose, boolean useHoldScaling) {
+        holdPoint(new BezierPoint(pose), pose.getHeading(), useHoldScaling);
     }
 
     /**
@@ -275,11 +318,10 @@ public class Follower {
         previousClosestPose = closestPose;
         closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
         currentPathChain.resetCallbacks();
+        currentCallbacks = currentPathChain.getNextPathCallbacks(chainIndex);
 
-        for (PathCallback callback : currentPathChain.getCallbacks()) {
-            if (callback.getPathIndex() == chainIndex) {
-                callback.initialize();
-            }
+        for (PathCallback callback : currentCallbacks) {
+            callback.initialize();
         }
     }
 
@@ -419,12 +461,20 @@ public class Follower {
 
     /** Calls an update to the ErrorCalculator, which updates the robot's current error. */
     public void updateErrors() {
-        errorCalculator.update(currentPose, currentPath, currentPathChain, followingPathChain, closestPose.getPose(), poseTracker.getVelocity(), chainIndex, drivetrain.xVelocity(), drivetrain.yVelocity(), getClosestPointHeadingGoal());
+        errorCalculator.update(currentPose, currentPath, currentPathChain, followingPathChain, closestPose.getPose(), poseTracker.getVelocity(), chainIndex, drivetrain.xVelocity(), drivetrain.yVelocity(), getClosestPointHeadingGoal(), usePredictiveBraking);
     }
 
     /** Calls an update to the VectorCalculator, which updates the robot's current vectors to correct. */
     public void updateVectors() {
-        vectorCalculator.update(useDrive, useHeading, useTranslational, useCentripetal, manualDrive, chainIndex, drivetrain.getMaxPowerScaling(), followingPathChain, centripetalScaling, currentPose, closestPose.getPose(), poseTracker.getVelocity(), currentPath, currentPathChain, useDrive && !holdingPosition ? getDriveError() : -1, getTranslationalError(), getHeadingError(), getClosestPointHeadingGoal());
+        vectorCalculator.update(useDrive, useHeading, useTranslational, useCentripetal,
+                                manualDrive, chainIndex,
+                                drivetrain.getMaxPowerScaling(), followingPathChain,
+                                centripetalScaling, currentPose, closestPose.getPose(),
+                                poseTracker.getVelocity(), currentPath,
+                                currentPathChain, useDrive && !holdingPosition ?
+                                    getDriveError() : -1, getTranslationalError(),
+                                getHeadingError(), getClosestPointHeadingGoal(),
+                                getTotalDistanceRemaining(), usePredictiveBraking);
     }
 
     public void updateErrorAndVectors() {updateErrors(); updateVectors();}
@@ -467,13 +517,39 @@ public class Follower {
             return;
         }
 
+        if (followingPathChain && chainIndex < currentPathChain.size() - 1 && usePredictiveBraking) {
+            double tangentialVelocity = getTangentialVelocity();
+            double brakingDisplacement = vectorCalculator.predictiveBrakingController
+                    .computeBrakingDisplacement(tangentialVelocity,
+                            Math.signum(tangentialVelocity));
+            if (brakingDisplacement >= getDistanceRemaining()) {
+                advancePathChain();
+            }
+        }
+
         if (isBusy) {
             previousClosestPose = closestPose;
             if (followingPathChain) currentPathChain.update();
             closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
             updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
-            drivetrain.runDrive(getCorrectiveVector(), getHeadingVector(), getDriveVector(), poseTracker.getPose().getHeading());
+            Vector totalField =
+                    getCorrectiveVector()
+                            .plus(getDriveVector());
+
+            Vector clampedField = getClampedFieldVector(totalField);
+
+            drivetrain.runDrive(
+                    clampedField,
+                    getHeadingVector(),
+                    new Vector(),
+                    poseTracker.getPose().getHeading()
+            );
+        }
+
+        if (followingPathChain && chainIndex < currentPathChain.size() - 1) {
+            advancePathChain();
+            return;
         }
 
         if (poseTracker.getVelocity().getMagnitude() < 1.0 && currentPath.getClosestPointTValue() > 0.8
@@ -481,7 +557,16 @@ public class Follower {
             zeroVelocityDetectedTimer = new Timer();
         }
 
-        if (!(currentPath.isAtParametricEnd() || ( zeroVelocityDetectedTimer != null && zeroVelocityDetectedTimer.getElapsedTime() > 500.0))) {
+        boolean skipToNextPath =
+                followingPathChain && chainIndex < currentPathChain.size() - 2 && usePredictiveBraking
+                        && vectorCalculator.predictiveBrakingController
+                        .computeBrakingDisplacement(getTangentialVelocity(), Math.signum(getTangentialVelocity()))
+                        >= getDistanceRemaining();
+
+        if (!skipToNextPath &&
+            !(currentPath.isAtParametricEnd()
+                || (zeroVelocityDetectedTimer != null
+                && zeroVelocityDetectedTimer.getElapsedTime() > 500.0))) {
             return;
         }
 
@@ -495,11 +580,10 @@ public class Follower {
             if (followingPathChain) currentPathChain.update();
             closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
             updateErrorAndVectors();
+            currentCallbacks = currentPathChain.getNextPathCallbacks(chainIndex);
 
-            for (PathCallback callback : currentPathChain.getCallbacks()) {
-                if (callback.getPathIndex() == chainIndex) {
-                    callback.initialize();
-                }
+            for (PathCallback callback : currentCallbacks) {
+                callback.initialize();
             }
 
             return;
@@ -543,8 +627,8 @@ public class Follower {
 
     /** This checks if any PathCallbacks should be run right now, and runs them if applicable. */
     public void updateCallbacks() {
-        for (PathCallback callback : currentPathChain.getCallbacks()) {
-            if (callback.isReady() && callback.getPathIndex() == chainIndex) {
+        for (PathCallback callback : currentCallbacks) {
+            if (callback.isReady()) {
                 callback.run();
             }
         }
@@ -558,6 +642,7 @@ public class Follower {
         manualDrive = false;
         holdingPosition = false;
         isBusy = false;
+        isTurning = false;
         reachedParametricPathEnd = false;
         zeroVelocityDetectedTimer = null;
     }
@@ -658,16 +743,25 @@ public class Follower {
         return poseTracker.getLocalizer().isNAN();
     }
 
-    /** Turns a certain amount of degrees left
+    /** Turns a certain amount of radians left
      * @param radians the amount of radians to turn
      * @param isLeft true if turning left, false if turning right
      */
+    @Deprecated
     public void turn(double radians, boolean isLeft) {
-        Pose temp = new Pose(getPose().getX(), getPose().getY(), getPose().getHeading() + (isLeft ? radians : -radians));
+        turn(isLeft ? radians : -radians);
+    }
+
+    /** Turns a certain amount of degrees counterclockwise
+     * @param radians the amount of radians to turn
+     */
+    public void turn(double radians) {
+        Pose temp = new Pose(getPose().getX(), getPose().getY(), getPose().getHeading() + radians);
         holdPoint(temp);
         isTurning = true;
         isBusy = true;
     }
+
 
     /** Turns to a specific heading
      * @param radians the heading in radians to turn to
@@ -681,6 +775,7 @@ public class Follower {
     /** Turns to a specific heading in degrees
      * @param degrees the heading in degrees to turn to
      */
+    @Deprecated
     public void turnToDegrees(double degrees) {
         turnTo(Math.toRadians(degrees));
     }
@@ -689,6 +784,7 @@ public class Follower {
      * @param degrees the amount of degrees to turn
      * @param isLeft true if turning left, false if turning right
      */
+    @Deprecated
     public void turnDegrees(double degrees, boolean isLeft) {
         turn(Math.toRadians(degrees), isLeft);
     }
@@ -1096,7 +1192,92 @@ public class Follower {
         return previousClosestPose;
     }
 
+    /**
+     * This gets the tangential velocity of the robot along the path
+     * @return the tangential velocity of the robot
+     */
+    public double getTangentialVelocity() {
+        return getVelocity().dot(getClosestPointTangentVector().normalize());
+    }
+
     public double getHeading() {
         return getPose().getHeading();
     }
+
+    /**
+     * Gets the total distance remaining for the robot to follow along the entire PathChain
+     * @return the distance left on the current PathChain to follow
+     */
+    public double getTotalDistanceRemaining() {
+        if (currentPath == null) {
+            return 0;
+        }
+
+        if (!followingPathChain) {
+            return currentPath.getDistanceRemaining();
+        }
+        
+        PathChain.DecelerationType type = currentPathChain.getDecelerationType();
+        if (type == PathChain.DecelerationType.NONE) {
+            return -1;
+        }
+        
+        return currentPathChain.getDistanceRemaining(chainIndex);
+    }
+
+    public void advancePathChain() {
+        breakFollowing();
+        isBusy = true;
+        followingPathChain = true;
+        chainIndex++;
+        setPath(currentPathChain.getPath(chainIndex));
+        previousClosestPose = closestPose;
+        if (followingPathChain) currentPathChain.update();
+        closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
+        updateErrorAndVectors();
+
+        for (PathCallback callback : currentPathChain.getCallbacks()) {
+            if (callback.getPathIndex() == chainIndex) {
+                callback.initialize();
+            }
+        }
+    }
+
+    private Vector fieldToRobot(Vector fieldVec, double robotHeading) {
+        double cos = Math.cos(robotHeading);
+        double sin = Math.sin(robotHeading);
+
+        double rx = cos * fieldVec.getXComponent() + sin * fieldVec.getYComponent();
+        double ry = -sin * fieldVec.getXComponent() + cos * fieldVec.getYComponent();
+
+        return new Vector(rx, ry);
+    }
+
+    private Vector robotToField(Vector robot, double heading) {
+        double cos = Math.cos(heading);
+        double sin = Math.sin(heading);
+
+        return new Vector(
+                cos * robot.getXComponent() - sin * robot.getYComponent(),
+                sin * robot.getXComponent() + cos * robot.getYComponent()
+        );
+    }
+
+    private double clampReversePower(double power, double directionOfMotion) {
+        boolean isOpposingMotion = directionOfMotion * power < 0;
+        if (!isOpposingMotion) return power;
+
+        if (power < 0) return Math.max(power, -coefficients.maximumBrakingPower);
+        else return Math.min(power, coefficients.maximumBrakingPower);
+    }
+
+    private Vector getClampedFieldVector(Vector fieldVector) {
+        double heading = poseTracker.getPose().getHeading();
+        Vector robotPower = fieldToRobot(fieldVector, heading);
+        Vector robotVelocity = fieldToRobot(poseTracker.getVelocity(), heading);
+        double x = clampReversePower(robotPower.getXComponent(), robotVelocity.getXComponent());
+        double y = clampReversePower(robotPower.getYComponent(), robotVelocity.getYComponent());
+        return robotToField(new Vector(x, y), heading);
+    }
+
 }
