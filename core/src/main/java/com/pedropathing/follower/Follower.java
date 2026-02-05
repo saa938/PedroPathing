@@ -97,6 +97,7 @@ public class Follower {
         breakFollowing();
     }
 
+
     public void updateConstants() {
         this.BEZIER_CURVE_SEARCH_LIMIT = constants.BEZIER_CURVE_SEARCH_LIMIT;
         this.holdPointTranslationalScaling = constants.holdPointTranslationalScaling;
@@ -104,7 +105,7 @@ public class Follower {
         this.centripetalScaling = constants.centripetalScaling;
         this.turnHeadingErrorThreshold = constants.turnHeadingErrorThreshold;
         this.automaticHoldEnd = constants.automaticHoldEnd;
-        this.usePredictiveBraking = constants.usePredictiveBraking;
+        this.usePredictiveBraking = !manualDrive && constants.usePredictiveBraking;
     }
 
     /**
@@ -674,6 +675,10 @@ public class Follower {
      * @return returns whether the Follower is at the parametric end of its Path.
      */
     public boolean atParametricEnd() {
+        if (currentPath == null){
+            return true;
+        }
+
         if (followingPathChain) {
             if (chainIndex == currentPathChain.size() - 1) return currentPath.isAtParametricEnd();
             return false;
