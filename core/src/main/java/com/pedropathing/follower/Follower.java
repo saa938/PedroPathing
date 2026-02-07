@@ -540,12 +540,9 @@ public class Follower {
 
             Vector clampedField = getClampedFieldVector(totalField);
 
-            drivetrain.runDrive(
-                    clampedField,
-                    getHeadingVector(),
-                    new Vector(),
-                    poseTracker.getPose().getHeading()
-            );
+            double robotHeading = poseTracker.getPose().getHeading();
+            double turnPower = getHeadingVector().getMagnitude(); // or whatever scalar you use
+            drivetrain.followFieldVector(totalField, turnPower, robotHeading);
         }
 
         if (followingPathChain && chainIndex < currentPathChain.size() - 1) {

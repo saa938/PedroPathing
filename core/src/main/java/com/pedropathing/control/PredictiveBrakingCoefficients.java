@@ -10,7 +10,7 @@ public class PredictiveBrakingCoefficients {
     public double kQuadraticFriction;
     public double P;
     public double maximumBrakingPower = 0.2;
-    
+
     /**
      * This creates a new PredictiveBrakingCoefficients with constant coefficients.
      *
@@ -33,7 +33,7 @@ public class PredictiveBrakingCoefficients {
     public PredictiveBrakingCoefficients(double proportional, double linearBraking, double quadraticFriction) {
         setCoefficients(proportional, linearBraking, quadraticFriction, maximumBrakingPower);
     }
-    
+
     /**
      * Adjusts the maximum amount of power applied in the opposite direction of motion.
      * Too high will cause the control hub to restart due to low voltage spikes. Too low
@@ -43,10 +43,10 @@ public class PredictiveBrakingCoefficients {
     public PredictiveBrakingCoefficients withMaximumBrakingPower(double maximumBrakingPower) {
         maximumBrakingPower = Math.max(0.0001, Math.min(1.0, maximumBrakingPower));
         setCoefficients(this.P, this.kLinearBraking, this.kQuadraticFriction,
-                        maximumBrakingPower);
+                maximumBrakingPower);
         return this;
     }
-    
+
     public void setCoefficients(double p, double linearBraking, double quadraticFriction,
                                 double maximumBrakingPower) {
         this.P = p;
@@ -54,7 +54,7 @@ public class PredictiveBrakingCoefficients {
         this.kQuadraticFriction = quadraticFriction;
         this.maximumBrakingPower = maximumBrakingPower;
     }
-    
+
     @Override
     public String toString() {
         return "P: " + P + ", L: " + kLinearBraking + ", Q: " + kQuadraticFriction;

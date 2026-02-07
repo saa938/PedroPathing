@@ -31,10 +31,10 @@ public class ErrorCalculator {
     private Vector velocityVector = new Vector();
     private double headingGoal;
     private boolean usePredictiveBraking;
-    
+
     public ErrorCalculator(FollowerConstants constants) {
         this.constants = constants;
-        
+
         KalmanFilterParameters driveKalmanFilterParameters = new KalmanFilterParameters(
                 6,
                 1);
@@ -126,32 +126,32 @@ public class ErrorCalculator {
         double forwardVelocity = forwardHeadingVector.dot(velocity);
         double forwardDistanceToGoal = forwardHeadingVector.dot(distanceToGoalVector);
         double forwardVelocityGoal = Kinematics.getVelocityToStopWithDeceleration(
-            forwardDistanceToGoal,
-            constants.forwardZeroPowerAcceleration
-                * (currentPath.getBrakingStrength() * 4)
+                forwardDistanceToGoal,
+                constants.forwardZeroPowerAcceleration
+                        * (currentPath.getBrakingStrength() * 4)
         );
         double forwardVelocityZeroPowerDecay = forwardVelocity -
-            Kinematics.getFinalVelocityAtDistance(
-                forwardVelocity,
-                constants.forwardZeroPowerAcceleration,
-                forwardDistanceToGoal
-            );
+                Kinematics.getFinalVelocityAtDistance(
+                        forwardVelocity,
+                        constants.forwardZeroPowerAcceleration,
+                        forwardDistanceToGoal
+                );
 
         Vector lateralHeadingVector = new Vector(1.0, currentPose.getHeading() - Math.PI / 2);
         double lateralVelocity = lateralHeadingVector.dot(velocity);
         double lateralDistanceToGoal = lateralHeadingVector.dot(distanceToGoalVector);
 
         double lateralVelocityGoal = Kinematics.getVelocityToStopWithDeceleration(
-            lateralDistanceToGoal,
-            constants.lateralZeroPowerAcceleration
-                * (currentPath.getBrakingStrength() * 4)
+                lateralDistanceToGoal,
+                constants.lateralZeroPowerAcceleration
+                        * (currentPath.getBrakingStrength() * 4)
         );
         double lateralVelocityZeroPowerDecay = lateralVelocity -
-            Kinematics.getFinalVelocityAtDistance(
-                lateralVelocity,
-                constants.lateralZeroPowerAcceleration,
-                lateralDistanceToGoal
-            );
+                Kinematics.getFinalVelocityAtDistance(
+                        lateralVelocity,
+                        constants.lateralZeroPowerAcceleration,
+                        lateralDistanceToGoal
+                );
 
         Vector forwardVelocityError = new Vector(forwardVelocityGoal - forwardVelocityZeroPowerDecay - forwardVelocity, forwardHeadingVector.getTheta());
         Vector lateralVelocityError = new Vector(lateralVelocityGoal - lateralVelocityZeroPowerDecay - lateralVelocity, lateralHeadingVector.getTheta());
@@ -246,11 +246,11 @@ public class ErrorCalculator {
 
     public String debugString() {
         return "Current Pose: " + currentPose.toString() + "\n" +
-               "Closest Pose: " + closestPose.toString() + "\n" +
-               "Current Path: " + (currentPath != null ? currentPath.toString() : "null") + "\n" + "Following Path Chain: " + followingPathChain + "\n" +
-               "Chain Index: " + chainIndex + "\n" +
-               "Drive Error: " + driveError + "\n" +
-               "Heading Error: " + headingError + "\n" +
-               "Raw Drive Error: " + rawDriveError;
+                "Closest Pose: " + closestPose.toString() + "\n" +
+                "Current Path: " + (currentPath != null ? currentPath.toString() : "null") + "\n" + "Following Path Chain: " + followingPathChain + "\n" +
+                "Chain Index: " + chainIndex + "\n" +
+                "Drive Error: " + driveError + "\n" +
+                "Heading Error: " + headingError + "\n" +
+                "Raw Drive Error: " + rawDriveError;
     }
 }
