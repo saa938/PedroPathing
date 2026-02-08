@@ -75,10 +75,6 @@ public class FollowerBuilder {
         return setDrivetrain(new Mecanum(hardwareMap, mecanumConstants));
     }
 
-    public FollowerBuilder swerveDrivetrain(SwerveConstants swerveConstants, SwervePod... pods) {
-        return setDrivetrain(new Swerve(hardwareMap, swerveConstants, pods));
-    }
-
     public FollowerBuilder pathConstraints(PathConstraints pathConstraints) {
         this.constraints = pathConstraints;
         PathConstraints.setDefaultConstraints(pathConstraints);

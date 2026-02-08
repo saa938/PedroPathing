@@ -2,7 +2,7 @@ package com.pedropathing.ftc.drivetrains;
 
 import static com.pedropathing.math.MathFunctions.findNormalizingScaling;
 
-import com.pedropathing.drivetrain.Drivetrain;
+import com.pedropathing.drivetrain.CustomDrivetrain;
 import com.pedropathing.math.Vector;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -14,15 +14,15 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * This is the Mecanum class, a child class of Drivetrain. This class takes in inputs Vectors for driving, heading
- * correction, and translational/centripetal correction and returns an array with wheel powers.
+ * This is the Mecanum class refactored with Black Ice followVector method.
+ *
  * @author Baron Henderson - 20077 The Indubitables
  * @author Anyi Lin - 10158 Scott's Bots
  * @author Aaron Yang - 10158 Scott's Bots
  * @author Harrison Womack - 10158 Scott's Bots
- * @version 1.0, 4/30/2025
+ * @version 2.0, 2/7/2026 - Added Black Ice followVector method
  */
-public class Mecanum extends Drivetrain {
+public class Mecanum extends CustomDrivetrain {
     public MecanumConstants constants;
     private final DcMotorEx leftFront;
     private final DcMotorEx leftRear;
@@ -73,6 +73,100 @@ public class Mecanum extends Drivetrain {
                 new Vector(copiedFrontLeftVector.getMagnitude(), 2 * Math.PI - copiedFrontLeftVector.getTheta()),
                 new Vector(copiedFrontLeftVector.getMagnitude(), 2 * Math.PI - copiedFrontLeftVector.getTheta()),
                 new Vector(copiedFrontLeftVector.getMagnitude(), copiedFrontLeftVector.getTheta())};
+    }
+
+    /**
+     * BLACK ICE STYLE: Follows a robot-relative vector with heading correction.
+     * This method takes the drive vector (already in robot coordinates) and applies
+     * turn power, then normalizes the result to fit within motor power limits.
+     *
+     * @param robotVector the robot-relative drive vector
+     * @param turnPower the turn power for heading correction
+     */
+    @Override
+    public void followVector(Vector robotVector, double turnPower) {
+        // robotVector is already in robot-relative coordinates
+        // Convert to mecanum wheel powers using standard mecanum math
+
+        // Get x and y components (robot-relative)
+        double x = robotVector.getXComponent();
+        double y = -robotVector.getYComponent(); // Negate because forward is typically negative Y in robot frame
+
+        // Calculate mecanum wheel powers
+        // Standard mecanum formula:
+        // FL = -y + x - turn
+        // BL = -y - x + turn
+        // FR = -y - x - turn
+        // BR = -y + x + turn
+
+        double upRight = y + x;   // FL, BR direction
+        double downLeft = y - x;  // BL, FR direction
+
+        double fl = upRight - turnPower;
+        double bl = downLeft + turnPower;
+        double fr = downLeft - turnPower;
+        double br = upRight + turnPower;
+
+        // Find the maximum absolute power
+        double max = Math.max(
+                Math.max(Math.abs(fl), Math.abs(bl)),
+                Math.max(Math.abs(fr), Math.abs(br))
+        );
+
+        // Normalize if any power exceeds 1.0
+        if (max > 1.0) {
+            double scale = 1.0 / max;
+            fl *= scale;
+            bl *= scale;
+            fr *= scale;
+            br *= scale;
+        }
+
+        // Apply voltage compensation if enabled
+        if (voltageCompensation) {
+            double voltageNormalized = getVoltageNormalized();
+            fl *= voltageNormalized;
+            bl *= voltageNormalized;
+            fr *= voltageNormalized;
+            br *= voltageNormalized;
+        }
+
+        // Apply motor caching threshold to reduce unnecessary updates
+        if (Math.abs(leftFront.getPower() - fl) > motorCachingThreshold) {
+            leftFront.setPower(fl);
+        }
+        if (Math.abs(leftRear.getPower() - bl) > motorCachingThreshold) {
+            leftRear.setPower(bl);
+        }
+        if (Math.abs(rightFront.getPower() - fr) > motorCachingThreshold) {
+            rightFront.setPower(fr);
+        }
+        if (Math.abs(rightRear.getPower() - br) > motorCachingThreshold) {
+            rightRear.setPower(br);
+        }
+    }
+
+    public void arcadeDrive(double forward, double strafe, double rotation) {
+        double[] wheelPowers = new double[4];
+
+        wheelPowers[0] = forward + strafe - rotation; //leftFront
+        wheelPowers[1] = forward - strafe + rotation; //rightFront
+        wheelPowers[2] = forward - strafe - rotation; //leftRear
+        wheelPowers[3] = forward + strafe + rotation; //rightRear
+
+        double denom = 1;
+        for (double power : wheelPowers) {
+            denom = Math.max(denom, Math.abs(power));
+        }
+
+        for (int i = 0; i < 4; i++) {
+            wheelPowers[i] = wheelPowers[i] / denom;
+        }
+
+        leftFront.setPower(wheelPowers[0]);
+        rightFront.setPower(wheelPowers[1]);
+        leftRear.setPower(wheelPowers[2]);
+        rightRear.setPower(wheelPowers[3]);
     }
 
     @Override

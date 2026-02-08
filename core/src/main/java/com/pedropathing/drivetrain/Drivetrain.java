@@ -28,12 +28,6 @@ public abstract class Drivetrain {
     protected double nominalVoltage;
 
     /**
-     * Maximum absolute braking power applied when commanded power is opposite of motion.
-     * Default 0.2; can be tuned by callers via setter.
-     */
-    protected double maxReverseBrakingPower = 0.2;
-
-    /**
      * This takes in vectors for corrective power, heading power, and pathing power and outputs
      * an Array.
      * IMPORTANT NOTE: all vector inputs are clamped between 0 and 1 inclusive in magnitude.
@@ -53,6 +47,15 @@ public abstract class Drivetrain {
     public abstract double[] calculateDrive(Vector correctivePower, Vector headingPower, Vector pathingPower, double robotHeading);
 
     /**
+     * NEW: Follows a robot-relative vector with heading correction.
+     * This is the Black Ice-style method that takes a single drive vector and turn power.
+     *
+     * @param robotVector the robot-relative drive vector (already converted from field coordinates)
+     * @param turnPower the turn power for heading correction
+     */
+    public abstract void followVector(Vector robotVector, double turnPower);
+
+    /**
      * This sets the maximum power scaling for the drivetrain. This is used to limit the maximum
      * power that can be applied to the motors, which is useful for preventing damage to the
      * drivetrain or for controlling the speed of the robot.
@@ -66,7 +69,8 @@ public abstract class Drivetrain {
 
     /**
      * This gets the maximum power scaling for the drivetrain. This is used to limit the maximum
-     * power that can be applied to the motors.
+     * power that can be applied to the motors, which is useful for preventing damage to the
+     * drivetrain or for controlling the speed of the robot.
      *
      * @return this returns a double between 0 and 1 inclusive that represents the maximum power
      *         scaling factor.
@@ -108,97 +112,6 @@ public abstract class Drivetrain {
      */
     public void runDrive(Vector correctivePower, Vector headingPower, Vector pathingPower, double robotHeading) {
         runDrive(calculateDrive(correctivePower, headingPower, pathingPower, robotHeading));
-    }
-
-    /**
-     * Convenience: follow a field-relative translation vector and a turn power scalar.
-     *
-     * This method:
-     *  1. Converts the supplied **field** vector into the robot frame (so X/Y align to robot axes).
-     *  2. Uses drivetrain's robot-relative velocities (xVelocity/yVelocity) to detect opposing motion.
-     *  3. Clamps per-axis commanded power if it opposes the current motion, using maxReverseBrakingPower.
-     *  4. Converts the clamped robot-relative vector back to the field frame.
-     *  5. Builds a heading Vector from the scalar turnPower and calls runDrive(...) so concrete drivetrains handle wheel mapping.
-     *
-     * @param fieldVector field-relative translational drive vector (direction + magnitude)
-     * @param turnPower scalar rotational command (positive -> turn one way, negative the other)
-     * @param robotHeading robot's current heading (radians)
-     */
-    public void followFieldVector(Vector fieldVector, double turnPower, double robotHeading) {
-        // 1) to robot frame
-        Vector robotCmd = fieldToRobot(fieldVector, robotHeading);
-
-        // 2) robot-relative velocity (abstract accessors implemented by concrete drivetrain)
-        double rvx = xVelocity();
-        double rvy = yVelocity();
-
-        // 3) clamp opposing motion per-axis
-        double cx = clampReversePower(robotCmd.getXComponent(), rvx);
-        double cy = clampReversePower(robotCmd.getYComponent(), rvy);
-
-        // 4) back to field frame
-        Vector clampedField = robotToField(new Vector(cx, cy), robotHeading);
-
-        // 5) turn scalar -> heading Vector (heading vector points in direction of robot heading)
-        Vector headingVec = new Vector(Math.cos(robotHeading), Math.sin(robotHeading)).times(turnPower);
-
-        // reuse existing pipeline
-        runDrive(clampedField, headingVec, new Vector(), robotHeading);
-    }
-
-    /**
-     * Convert a field-relative vector to robot-relative using heading (radians).
-     */
-    protected Vector fieldToRobot(Vector field, double heading) {
-        double cos = Math.cos(heading);
-        double sin = Math.sin(heading);
-
-        double fx = field.getXComponent();
-        double fy = field.getYComponent();
-
-        double rx = cos * fx + sin * fy;
-        double ry = -sin * fx + cos * fy;
-
-        return new Vector(rx, ry);
-    }
-
-    /**
-     * Convert a robot-relative vector back to field frame.
-     */
-    protected Vector robotToField(Vector robot, double heading) {
-        double cos = Math.cos(heading);
-        double sin = Math.sin(heading);
-
-        double rx = robot.getXComponent();
-        double ry = robot.getYComponent();
-
-        double fx = cos * rx - sin * ry;
-        double fy = sin * rx + cos * ry;
-
-        return new Vector(fx, fy);
-    }
-
-    /**
-     * Clamp opposing power per-axis relative to directionOfMotion (robot-relative velocity component).
-     * If the commanded power is in the opposite direction of motion, limit its magnitude to maxReverseBrakingPower.
-     */
-    protected double clampReversePower(double power, double directionOfMotion) {
-        boolean isOpposingMotion = directionOfMotion * power < 0;
-        if (!isOpposingMotion) return power;
-
-        if (power < 0) return Math.max(power, -Math.abs(maxReverseBrakingPower));
-        else return Math.min(power, Math.abs(maxReverseBrakingPower));
-    }
-
-    /**
-     * Setter/getter for the brake clamp magnitude so teams can tune or externalize it to coefficients.
-     */
-    public void setMaxReverseBrakingPower(double maxReverseBrakingPower) {
-        this.maxReverseBrakingPower = Math.abs(maxReverseBrakingPower);
-    }
-
-    public double getMaxReverseBrakingPower() {
-        return this.maxReverseBrakingPower;
     }
 
     /**
@@ -283,5 +196,4 @@ public abstract class Drivetrain {
      * @return this returns a String that contains the debug information for the drivetrain.
      */
     public abstract String debugString();
-
 }

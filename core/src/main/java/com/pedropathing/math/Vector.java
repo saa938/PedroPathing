@@ -285,4 +285,8 @@ public class Vector {
         double scale = this.dot(other) / other.dot(other);
         return other.times(scale);
     }
+
+    public Vector perpendicularLeft() {
+        return new Vector(-getYComponent(), getXComponent());
+    }
 }
