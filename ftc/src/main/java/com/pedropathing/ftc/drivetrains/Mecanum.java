@@ -14,13 +14,13 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * This is the Mecanum class, a child class of Drivetrain. This class takes in inputs Vectors for driving, heading
- * correction, and translational/centripetal correction and returns an array with wheel powers.
+ * This is the Mecanum class refactored with Black Ice followVector method.
+ *
  * @author Baron Henderson - 20077 The Indubitables
  * @author Anyi Lin - 10158 Scott's Bots
  * @author Aaron Yang - 10158 Scott's Bots
  * @author Harrison Womack - 10158 Scott's Bots
- * @version 1.0, 4/30/2025
+ * @version 2.0, 2/7/2026 - Added Black Ice followVector method
  */
 public class Mecanum extends CustomDrivetrain {
     public MecanumConstants constants;
@@ -33,7 +33,6 @@ public class Mecanum extends CustomDrivetrain {
     private double motorCachingThreshold;
     private boolean useBrakeModeInTeleOp;
     private double staticFrictionCoefficient;
-    private double reversePowerClampThreshold = 0.2;
 
     /**
      * This creates a new Mecanum, which takes in various movement vectors and outputs
@@ -76,6 +75,77 @@ public class Mecanum extends CustomDrivetrain {
                 new Vector(copiedFrontLeftVector.getMagnitude(), copiedFrontLeftVector.getTheta())};
     }
 
+    /**
+     * BLACK ICE STYLE: Follows a robot-relative vector with heading correction.
+     * This method takes the drive vector (already in robot coordinates) and applies
+     * turn power, then normalizes the result to fit within motor power limits.
+     *
+     * @param robotVector the robot-relative drive vector
+     * @param turnPower the turn power for heading correction
+     */
+    @Override
+    public void followVector(Vector robotVector, double turnPower) {
+        // robotVector is already in robot-relative coordinates
+        // Convert to mecanum wheel powers using standard mecanum math
+
+        // Get x and y components (robot-relative)
+        double x = robotVector.getXComponent();
+        double y = -robotVector.getYComponent(); // Negate because forward is typically negative Y in robot frame
+
+        // Calculate mecanum wheel powers
+        // Standard mecanum formula:
+        // FL = y + x - turn
+        // FR = y - x - turn
+        // BL = y - x + turn
+        // BR = y + x + turn
+
+        double upRight = y + x;   // FL, BR direction
+        double downLeft = y - x;  // BL, FR direction
+
+        double fl = upRight - turnPower;
+        double bl = downLeft + turnPower;
+        double fr = downLeft - turnPower;
+        double br = upRight + turnPower;
+
+        // Find the maximum absolute power
+        double max = Math.max(
+                Math.max(Math.abs(fl), Math.abs(bl)),
+                Math.max(Math.abs(fr), Math.abs(br))
+        );
+
+        // Normalize if any power exceeds 1.0
+        if (max > 1.0) {
+            double scale = 1.0 / max;
+            fl *= scale;
+            bl *= scale;
+            fr *= scale;
+            br *= scale;
+        }
+
+        // Apply voltage compensation if enabled
+        if (voltageCompensation) {
+            double voltageNormalized = getVoltageNormalized();
+            fl *= voltageNormalized;
+            bl *= voltageNormalized;
+            fr *= voltageNormalized;
+            br *= voltageNormalized;
+        }
+
+        // Apply motor caching threshold to reduce unnecessary updates
+        if (Math.abs(leftFront.getPower() - fl) > motorCachingThreshold) {
+            leftFront.setPower(fl);
+        }
+        if (Math.abs(leftRear.getPower() - bl) > motorCachingThreshold) {
+            leftRear.setPower(bl);
+        }
+        if (Math.abs(rightFront.getPower() - fr) > motorCachingThreshold) {
+            rightFront.setPower(fr);
+        }
+        if (Math.abs(rightRear.getPower() - br) > motorCachingThreshold) {
+            rightRear.setPower(br);
+        }
+    }
+
     public void arcadeDrive(double forward, double strafe, double rotation) {
         double[] wheelPowers = new double[4];
 
@@ -110,99 +180,6 @@ public class Mecanum extends CustomDrivetrain {
         this.voltageCompensation = constants.useVoltageCompensation;
         this.nominalVoltage = constants.nominalVoltage;
         this.staticFrictionCoefficient = constants.staticFrictionCoefficient;
-    }
-
-    /**
-     * Adjusts directional effort by clamping reverse power when moving opposite to velocity.
-     * Caps the power to reversePowerClampThreshold if the power is opposite the direction of velocity.
-     *
-     * @param requestedVector the requested movement vector
-     * @return the adjusted movement vector
-     */
-    private Vector adjustDirectionalEffort(Vector requestedVector) {
-        // Get current velocity components (assume these are set by the localizer)
-        double xVel = constants.xVelocity;
-        double yVel = constants.yVelocity;
-        Vector velocity = new Vector(xVel, yVel);
-
-        // If velocity is near zero, no adjustment needed
-        if (velocity.getMagnitude() < 0.01) {
-            return requestedVector;
-        }
-
-        // Check if requested vector is opposite to velocity
-        double dotProduct = requestedVector.dot(velocity);
-
-        // If moving opposite to velocity (negative dot product), clamp the magnitude
-        if (dotProduct < 0) {
-            double clampedMagnitude = Math.min(requestedVector.getMagnitude(), reversePowerClampThreshold);
-            return Vector.fromPolar(clampedMagnitude, requestedVector.getTheta());
-        }
-
-        return requestedVector;
-    }
-
-    /**
-     * This makes the drivetrain follow a robot-relative vector with a turn power.
-     * This implements the Black Ice style drive control with reverse power clamping.
-     *
-     * @param robotVector the robot-relative movement vector
-     * @param turnPower the turning power (-1 to 1)
-     */
-    @Override
-    public void followVector(Vector robotVector, double turnPower) {
-        // Adjust for reverse power clamping
-        Vector adjustedVector = adjustDirectionalEffort(robotVector);
-
-        double v_x = adjustedVector.getXComponent();
-        double v_y = adjustedVector.getYComponent();
-
-        // Standard mecanum wheel power calculation
-        // For mecanum: upRight controls FL and BR, downLeft controls BL and FR
-        double upRight  = -v_y + v_x;  // FL, BR
-        double downLeft = -v_y - v_x;  // BL, FR
-
-        double fl = upRight  - turnPower;
-        double bl = downLeft + turnPower;
-        double fr = downLeft - turnPower;
-        double br = upRight  + turnPower;
-
-        // Normalize to keep all powers within [-1, 1]
-        double max = Math.max(
-                Math.max(Math.abs(fl), Math.abs(bl)),
-                Math.max(Math.abs(fr), Math.abs(br))
-        );
-
-        if (max > 1.0) {
-            double scale = 1.0 / max;
-            fl *= scale;
-            bl *= scale;
-            fr *= scale;
-            br *= scale;
-        }
-
-        // Apply voltage compensation if enabled
-        if (voltageCompensation) {
-            double voltageNormalized = getVoltageNormalized();
-            fl *= voltageNormalized;
-            bl *= voltageNormalized;
-            fr *= voltageNormalized;
-            br *= voltageNormalized;
-        }
-
-        // Apply motor power with caching
-        if (Math.abs(leftFront.getPower() - fl) > motorCachingThreshold) {
-            leftFront.setPower(fl);
-        }
-        if (Math.abs(leftRear.getPower() - bl) > motorCachingThreshold) {
-            leftRear.setPower(bl);
-        }
-        if (Math.abs(rightFront.getPower() - fr) > motorCachingThreshold) {
-            rightFront.setPower(fr);
-        }
-        if (Math.abs(rightRear.getPower() - br) > motorCachingThreshold) {
-            rightRear.setPower(br);
-        }
     }
 
     /**
@@ -407,21 +384,5 @@ public class Mecanum extends CustomDrivetrain {
 
     public List<DcMotorEx> getMotors() {
         return motors;
-    }
-
-    /**
-     * Sets the reverse power clamp threshold for adjusting directional effort.
-     * @param threshold the threshold value (default 0.2)
-     */
-    public void setReversePowerClampThreshold(double threshold) {
-        this.reversePowerClampThreshold = threshold;
-    }
-
-    /**
-     * Gets the reverse power clamp threshold.
-     * @return the current threshold value
-     */
-    public double getReversePowerClampThreshold() {
-        return reversePowerClampThreshold;
     }
 }
