@@ -56,7 +56,7 @@ public class VectorCalculator {
 
     private PIDFController secondaryTranslationalPIDF;
     private PIDFController secondaryTranslationalIntegral;
-    private PIDFController translationalPIDF;
+    public PIDFController translationalPIDF;
     private PIDFController translationalIntegral;
     private PIDFController secondaryHeadingPIDF;
 

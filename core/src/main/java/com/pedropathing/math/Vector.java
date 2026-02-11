@@ -59,6 +59,17 @@ public class Vector {
     }
 
     /**
+     * Creates a vector from polar coordinates.
+     *
+     * @param magnitude the magnitude (length) of the vector
+     * @param theta     the direction (angle in radians) of the vector
+     * @return a new Vector with the specified polar coordinates
+     */
+    public static Vector fromPolar(double magnitude, double theta) {
+        return new Vector(magnitude, theta);
+    }
+
+    /**
      * Sets the vector's magnitude and direction (polar coordinates).
      * Updates the Cartesian components accordingly.
      *

@@ -47,11 +47,11 @@ public abstract class Drivetrain {
     public abstract double[] calculateDrive(Vector correctivePower, Vector headingPower, Vector pathingPower, double robotHeading);
 
     /**
-     * NEW: Follows a robot-relative vector with heading correction.
-     * This is the Black Ice-style method that takes a single drive vector and turn power.
+     * This makes the drivetrain follow a robot-relative vector with a turn power.
+     * This is the new method for controlling the drivetrain with prioritized power allocation.
      *
-     * @param robotVector the robot-relative drive vector (already converted from field coordinates)
-     * @param turnPower the turn power for heading correction
+     * @param robotVector the robot-relative movement vector
+     * @param turnPower the turning power (-1 to 1)
      */
     public abstract void followVector(Vector robotVector, double turnPower);
 
@@ -196,4 +196,5 @@ public abstract class Drivetrain {
      * @return this returns a String that contains the debug information for the drivetrain.
      */
     public abstract String debugString();
+
 }
