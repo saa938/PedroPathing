@@ -107,7 +107,6 @@ public abstract class CustomDrivetrain extends Drivetrain {
         arcadeDrive(translationalVector.getXComponent(), translationalVector.getYComponent(), calculatedDrive[2]);
     }
 
-    @Deprecated
     @Override
     public void runDrive(double[] drivePowers) {}
 }

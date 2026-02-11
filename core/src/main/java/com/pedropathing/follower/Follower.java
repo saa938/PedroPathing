@@ -508,15 +508,12 @@ public class Follower {
      */
     private Vector clampReversePower(Vector power, Vector velocity) {
         if (velocity.getMagnitude() < 0.01) {
-            // Not moving, no clamping needed
             return power;
         }
 
-        // Calculate the component of power in the direction of velocity
         Vector velocityNormalized = velocity.normalize();
         double powerAlongVelocity = power.dot(velocityNormalized);
 
-        // If power opposes velocity, clamp it
         if (powerAlongVelocity < 0) {
             Vector parallelComponent = velocityNormalized.times(
                     Math.max(powerAlongVelocity, -reversePowerClampThreshold)
@@ -536,13 +533,10 @@ public class Follower {
      * @param headingPower the heading correction power
      */
     public void followFieldVector(Vector fieldVector, double headingPower) {
-        // Convert field vector to robot-relative
         Vector robotVector = toRobotRelativeVector(fieldVector);
 
-        // Clamp reverse power
         robotVector = clampReversePower(robotVector, toRobotRelativeVector(getVelocity()));
 
-        // Run the drivetrain with the robot-relative vector
         drivetrain.followVector(robotVector, headingPower);
     }
 
@@ -600,29 +594,27 @@ public class Follower {
             updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
 
-            // BLACK ICE POWER ALLOCATION STRATEGY
             Vector position = currentPose.getAsVector();
             Vector tangent = currentPath.getClosestPointTangentVector().normalize();
             Vector normal = tangent.perpendicularLeft();
             Vector velocity = getVelocity();
 
-            // Calculate normal (translational) error and power
+            // normal (translational)
             double normalError = closestPose.getPose().getAsVector().minus(position).dot(normal);
             double normalPower = vectorCalculator.getTranslationalCorrection(
                     new Vector(normalError, normal.getTheta()),
                     currentPose
             ).getMagnitude() * Math.signum(normalError);
 
-            // Calculate tangent (drive) power
+            // tangent (drive)
             double distanceRemaining = getDistanceRemaining();
             if (closestPose.getPose().distanceFrom(currentPath.getPoint(1)) < 0.01) {
-                // At end of path, use direct distance
                 distanceRemaining = currentPath.getPoint(1).getAsVector().minus(position).dot(tangent);
             }
             double tangentPower = vectorCalculator.getDriveVector().getMagnitude() *
                     Math.signum(distanceRemaining);
 
-            // Calculate heading power
+            //  heading
             double targetHeading = getClosestPointHeadingGoal();
             double headingError = getHeadingError();
             double headingPower = vectorCalculator.getHeadingVector(
@@ -631,7 +623,7 @@ public class Follower {
                     targetHeading
             ).getMagnitude() * Math.signum(headingError);
 
-            // Power allocation with prioritization: normal → heading → tangent
+            // normal -> heading -> tangent
             double maxMagnitude = globalMaxPower;
             double normalUsed = allocatePower(normalPower, maxMagnitude);
             double remaining = Math.sqrt(
@@ -643,19 +635,12 @@ public class Follower {
             );
             double tangentUsed = allocatePower(tangentPower, remaining);
 
-            // Construct drive power vector
             Vector drivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
-
-            // Follow the field vector with heading correction
             followFieldVector(drivePower, headingUsed);
 
-            // PATH SKIPPING LOGIC (Black Ice style)
-            boolean skipToNextPath = followingPathChain &&
-                    chainIndex < currentPathChain.size() - 1 &&
-                    usePredictiveBraking &&
-                    drivePower.dot(tangent) < 1.0;
-
-            if (skipToNextPath) {
+            // path skipping
+            if (followingPathChain && chainIndex < currentPathChain.size() - 1 &&
+                    Math.abs(tangentUsed) < 1.0) {
                 advanceToNextPath();
                 return;
             }
