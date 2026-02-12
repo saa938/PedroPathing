@@ -55,6 +55,22 @@ public class PredictiveBrakingCoefficients {
         this.maximumBrakingPower = maximumBrakingPower;
     }
 
+    public double getkLinearBraking() {
+        return kLinearBraking;
+    }
+
+    public double getMaximumBrakingPower() {
+        return maximumBrakingPower;
+    }
+
+    public double getkQuadraticFriction() {
+        return kQuadraticFriction;
+    }
+
+    public double getP() {
+        return P;
+    }
+
     @Override
     public String toString() {
         return "P: " + P + ", L: " + kLinearBraking + ", Q: " + kQuadraticFriction;

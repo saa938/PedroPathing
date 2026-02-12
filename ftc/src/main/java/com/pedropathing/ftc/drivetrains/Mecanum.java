@@ -2,6 +2,7 @@ package com.pedropathing.ftc.drivetrains;
 
 import static com.pedropathing.math.MathFunctions.findNormalizingScaling;
 
+import com.pedropathing.control.PredictiveBrakingCoefficients;
 import com.pedropathing.drivetrain.CustomDrivetrain;
 import com.pedropathing.math.Vector;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -42,12 +43,13 @@ public class Mecanum extends CustomDrivetrain {
      * @param hardwareMap      this is the HardwareMap object that contains the motors and other hardware
      * @param mecanumConstants this is the MecanumConstants object that contains the names of the motors and directions etc.
      */
-    public Mecanum(HardwareMap hardwareMap, MecanumConstants mecanumConstants) {
+    public Mecanum(HardwareMap hardwareMap, MecanumConstants mecanumConstants, PredictiveBrakingCoefficients predictiveBrakingCoefficients) {
         constants = mecanumConstants;
 
         this.maxPowerScaling = mecanumConstants.maxPower;
         this.motorCachingThreshold = mecanumConstants.motorCachingThreshold;
         this.useBrakeModeInTeleOp = mecanumConstants.useBrakeModeInTeleOp;
+        this.maximumBrakingPower = predictiveBrakingCoefficients.getMaximumBrakingPower();
 
         voltageSensor = hardwareMap.voltageSensor.iterator().next();
 
@@ -214,25 +216,37 @@ public class Mecanum extends CustomDrivetrain {
         return wheelPowers;
     }
 
-    private Vector adjustDirectionalEffort(Vector input) {
-        return new Vector(
-                input.getXComponent(),
-                input.getYComponent() * (xVelocity() / yVelocity())
-        );
-    }
-
+    /**
+     * Follows a robot-relative vector with heading correction and velocity-aware clamping.
+     * This implements mecanum-specific logic including directional velocity adjustment.
+     *
+     * @param robotVector the robot-relative drive vector
+     * @param turnPower the turn power for heading correction
+     * @param robotVelocity the robot-relative velocity vector for reverse power clamping
+     */
     @Override
-    public void followVector(Vector robotVector, double turnPower) {
-        Vector v = adjustDirectionalEffort(robotVector);
+    public void followVector(Vector robotVector, double turnPower, Vector robotVelocity) {
+        // Adjust for mecanum directional velocity differences
+        Vector adjusted = new Vector(
+                robotVector.getXComponent(),
+                robotVector.getYComponent() * (xVelocity() / yVelocity())
+        );
 
-        double upRight  = -v.getYComponent() + v.getXComponent();  // FL, BR
-        double downLeft = -v.getYComponent() - v.getXComponent();  // BL, FR
+        // Apply reverse power clamping separately for forward and lateral
+        double forward = clampReversePower(adjusted.getYComponent(), robotVelocity.getYComponent());
+        double strafe = clampReversePower(adjusted.getXComponent(), robotVelocity.getXComponent());
 
+        // Calculate mecanum wheel powers (Pedro convention: -Y is forward, +X is strafe right)
+        double upRight  = -forward + strafe;  // FL and BR move together
+        double downLeft = -forward - strafe;  // BL and FR move together
+
+        // Add turning (left side -, right side +)
         double fl = upRight  - turnPower;
-        double bl = downLeft + turnPower;
-        double fr = downLeft - turnPower;
+        double bl = downLeft - turnPower;
+        double fr = downLeft + turnPower;
         double br = upRight  + turnPower;
 
+        // Normalize to [-1, 1]
         double max = Math.max(
                 Math.max(Math.abs(fl), Math.abs(bl)),
                 Math.max(Math.abs(fr), Math.abs(br))
@@ -252,6 +266,30 @@ public class Mecanum extends CustomDrivetrain {
         rightFront.setPower(fr);
         rightRear.setPower(br);
     }
+
+    /**
+     * Prevents the robot from applying too much power in the opposite direction of
+     * the robot's momentum. Alternating full forward (+1) and full reverse (-1) power
+     * causes the control hub to restart due to low voltage spikes. This prevents that by
+     * capping the amount of voltage applied opposite to the direction of motion to be
+     * very minimal. Even a tiny opposite voltage (e.g., -0.0001) locks the wheels like
+     * zero-power brake mode, using the motor's own momentum for braking without consuming
+     * significant energy.
+     */
+    private double clampReversePower(double power, double directionOfMotion) {
+        boolean isOpposingMotion = directionOfMotion * power < 0;
+        if (!isOpposingMotion) {
+            return power;
+        }
+        double clampedPower;
+        if (power < 0) {
+            clampedPower = Math.max(power, -maximumBrakingPower);
+        } else {
+            clampedPower = Math.min(power, maximumBrakingPower);
+        }
+        return clampedPower;
+    }
+
     /**
      * This sets the motors to the zero power behavior of brake.
      */

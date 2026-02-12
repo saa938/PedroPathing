@@ -57,7 +57,6 @@ public class Follower {
     private double holdPointTranslationalScaling;
     private double holdPointHeadingScaling;
     private double turnHeadingErrorThreshold;
-    private double reversePowerClampThreshold;
     private long reachedParametricPathEndTime;
     public boolean useTranslational = true;
     public boolean useCentripetal = true;
@@ -92,7 +91,6 @@ public class Follower {
         turnHeadingErrorThreshold = constants.turnHeadingErrorThreshold;
         automaticHoldEnd = constants.automaticHoldEnd;
         usePredictiveBraking = constants.usePredictiveBraking;
-        reversePowerClampThreshold = 0.2; // Default clamp for reverse power
 
         breakFollowing();
     }
@@ -119,14 +117,6 @@ public class Follower {
 
     public void setCentripetalScaling(double set) {
         centripetalScaling = set;
-    }
-
-    /**
-     * Sets the threshold for reverse power clamping (default 0.2)
-     * @param threshold the maximum power allowed when opposing velocity direction
-     */
-    public void setReversePowerClampThreshold(double threshold) {
-        this.reversePowerClampThreshold = MathFunctions.clamp(threshold, 0, 1);
     }
 
     /**
@@ -501,46 +491,6 @@ public class Follower {
     }
 
     /**
-     * Clamps reverse power to prevent fighting against velocity
-     * @param power the power vector to clamp
-     * @param velocity the current velocity vector
-     * @return the clamped power vector
-     */
-    private Vector clampReversePower(Vector power, Vector velocity) {
-        if (velocity.getMagnitude() < 0.01) {
-            return power;
-        }
-
-        Vector velocityNormalized = velocity.normalize();
-        double powerAlongVelocity = power.dot(velocityNormalized);
-
-        if (powerAlongVelocity < 0) {
-            Vector parallelComponent = velocityNormalized.times(
-                    Math.max(powerAlongVelocity, -reversePowerClampThreshold)
-            );
-            Vector perpendicularComponent = power.minus(
-                    velocityNormalized.times(powerAlongVelocity)
-            );
-            return parallelComponent.plus(perpendicularComponent);
-        }
-
-        return power;
-    }
-
-    /**
-     * Follows a field-relative vector with heading control using Black Ice strategy
-     * @param fieldVector the field-relative drive vector
-     * @param headingPower the heading correction power
-     */
-    public void followFieldVector(Vector fieldVector, double headingPower) {
-        Vector robotVector = toRobotRelativeVector(fieldVector);
-
-        robotVector = clampReversePower(robotVector, toRobotRelativeVector(getVelocity()));
-
-        drivetrain.followVector(robotVector, headingPower);
-    }
-
-    /**
      * Converts a field-relative vector to robot-relative
      * @param fieldVector the field-relative vector
      * @return the robot-relative vector
@@ -596,25 +546,23 @@ public class Follower {
 
             Vector position = currentPose.getAsVector();
             Vector tangent = currentPath.getClosestPointTangentVector().normalize();
-            Vector normal = tangent.perpendicularLeft();
+            Vector normal = currentPath.getClosestLeftGradientVector().normalize();
             Vector velocity = getVelocity();
 
-            // normal (translational)
-            double normalError = closestPose.getPose().getAsVector().minus(position).dot(normal);
-            double normalPower = vectorCalculator.getTranslationalCorrection(
-                    new Vector(normalError, normal.getTheta()),
+            // Get errors from error calculator (already signed)
+            Vector translationalError = getTranslationalError();
+
+            // Get correction vectors from vector calculator
+            Vector translationalCorrection = vectorCalculator.getTranslationalCorrection(
+                    translationalError,
                     currentPose
-            ).getMagnitude() * Math.signum(normalError);
+            );
+            double normalPower = translationalCorrection.dot(normal);
 
-            // tangent (drive)
-            double distanceRemaining = getDistanceRemaining();
-            if (closestPose.getPose().distanceFrom(currentPath.getPoint(1)) < 0.01) {
-                distanceRemaining = currentPath.getPoint(1).getAsVector().minus(position).dot(tangent);
-            }
-            double tangentPower = vectorCalculator.getDriveVector().getMagnitude() *
-                    Math.signum(distanceRemaining);
+            Vector driveVector = vectorCalculator.getDriveVector();
+            double tangentPower = driveVector.dot(tangent);
 
-            //  heading
+            // Heading correction
             double targetHeading = getClosestPointHeadingGoal();
             double headingError = getHeadingError();
             double headingPower = vectorCalculator.getHeadingVector(
@@ -623,7 +571,7 @@ public class Follower {
                     targetHeading
             ).getMagnitude() * Math.signum(headingError);
 
-            // normal -> heading -> tangent
+            // Black Ice power allocation: normal → heading → tangent
             double maxMagnitude = globalMaxPower;
             double normalUsed = allocatePower(normalPower, maxMagnitude);
             double remaining = Math.sqrt(
@@ -635,15 +583,15 @@ public class Follower {
             );
             double tangentUsed = allocatePower(tangentPower, remaining);
 
-            Vector drivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
-            followFieldVector(drivePower, headingUsed);
+            // Compose field-relative drive vector
+            Vector fieldDrivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
 
-            // path skipping
-            if (followingPathChain && chainIndex < currentPathChain.size() - 1 &&
-                    Math.abs(tangentUsed) < 1.0) {
-                advanceToNextPath();
-                return;
-            }
+            // Convert to robot-relative for drivetrain
+            Vector robotDrivePower = toRobotRelativeVector(fieldDrivePower);
+            Vector robotVelocity = toRobotRelativeVector(velocity);
+
+            // Send to drivetrain (clamping happens there)
+            drivetrain.followVector(robotDrivePower, headingUsed, robotVelocity);
         }
 
         if (poseTracker.getVelocity().getMagnitude() < 1.0 && currentPath.getClosestPointTValue() > 0.8
@@ -651,7 +599,13 @@ public class Follower {
             zeroVelocityDetectedTimer = new Timer();
         }
 
+        // Check if we should advance to next path using predictive braking
+        boolean nextPathWithinBrakingDistance =
+                followingPathChain && chainIndex < currentPathChain.size() - 1 && usePredictiveBraking
+                        && vectorCalculator.getDriveVector().dot(getClosestPointTangentVector()) < 1;
+
         if (!(currentPath.isAtParametricEnd()
+                || nextPathWithinBrakingDistance
                 || (zeroVelocityDetectedTimer != null
                 && zeroVelocityDetectedTimer.getElapsedTime() > 500.0))) {
             return;

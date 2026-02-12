@@ -17,6 +17,7 @@ public abstract class CustomDrivetrain extends Drivetrain {
     protected Vector lastCorrectivePower = new Vector();
     protected Vector lastPathingPower = new Vector();
     protected double lastHeading = 0;
+    protected double maximumBrakingPower = 0.2; // Default clamping threshold
 
     /**
      * This method takes in forward, strafe, and rotation values and applies them to
@@ -32,6 +33,41 @@ public abstract class CustomDrivetrain extends Drivetrain {
      *                 because CCW is positive
      */
     public abstract void arcadeDrive(double forward, double strafe, double rotation);
+
+    /**
+     * Sets the maximum braking power threshold (default 0.2)
+     * @param threshold the maximum power allowed when opposing velocity direction
+     */
+    public void setMaximumBrakingPower(double threshold) {
+        this.maximumBrakingPower = Math.max(0, Math.min(1, threshold));
+    }
+
+    /**
+     * Prevents the robot from applying too much power in the opposite direction of
+     * the robot's momentum. Alternating full forward (+1) and full reverse (-1) power
+     * causes the control hub to restart due to low voltage spikes. This prevents that by
+     * capping the amount of voltage applied opposite to the direction of motion to be
+     * very minimal. Even a tiny opposite voltage (e.g., -0.0001) locks the wheels like
+     * zero-power brake mode, using the motor's own momentum for braking without consuming
+     * significant energy.
+     *
+     * @param power the requested power
+     * @param directionOfMotion the current velocity in that direction
+     * @return the clamped power
+     */
+    private double clampReversePower(double power, double directionOfMotion) {
+        boolean isOpposingMotion = directionOfMotion * power < 0;
+        if (!isOpposingMotion) {
+            return power;
+        }
+        double clampedPower;
+        if (power < 0) {
+            clampedPower = Math.max(power, -maximumBrakingPower);
+        } else {
+            clampedPower = Math.min(power, maximumBrakingPower);
+        }
+        return clampedPower;
+    }
 
     @Override
     public double[] calculateDrive(Vector correctivePower, Vector headingPower, Vector pathingPower, double robotHeading) {
@@ -78,7 +114,6 @@ public abstract class CustomDrivetrain extends Drivetrain {
         }
     }
 
-
     protected boolean scaleDown(Vector staticVector, Vector variableVector, boolean useMinus) {
         return (staticVector.plus(variableVector).getMagnitude() >= maxPowerScaling) ||
                 (useMinus && staticVector.minus(variableVector).getMagnitude() >= maxPowerScaling);
@@ -107,6 +142,30 @@ public abstract class CustomDrivetrain extends Drivetrain {
         arcadeDrive(translationalVector.getXComponent(), translationalVector.getYComponent(), calculatedDrive[2]);
     }
 
+    /**
+     * Follows a robot-relative vector with heading correction and velocity-aware clamping.
+     * Clamping happens here in the drivetrain layer where we have access to robot-relative velocity.
+     *
+     * @param robotVector the robot-relative drive vector (already in robot frame)
+     * @param turnPower the turn power for heading correction
+     * @param robotVelocity the robot-relative velocity vector for reverse power clamping
+     */
+    @Override
+    public void followVector(Vector robotVector, double turnPower, Vector robotVelocity) {
+        // Clamp forward and lateral separately based on velocity
+        double forward = clampReversePower(
+                robotVector.getYComponent(),
+                robotVelocity.getYComponent()
+        );
+        double strafe = clampReversePower(
+                robotVector.getXComponent(),
+                robotVelocity.getXComponent()
+        );
+
+        arcadeDrive(forward, strafe, turnPower);
+    }
+
+    @Deprecated
     @Override
     public void runDrive(double[] drivePowers) {}
 }

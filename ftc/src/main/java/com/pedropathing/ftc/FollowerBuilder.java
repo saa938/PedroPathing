@@ -1,4 +1,5 @@
 package com.pedropathing.ftc;
+import com.pedropathing.control.PredictiveBrakingCoefficients;
 import com.pedropathing.drivetrain.Drivetrain;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.follower.FollowerConstants;
@@ -71,8 +72,8 @@ public class FollowerBuilder {
         return this;
     }
 
-    public FollowerBuilder mecanumDrivetrain(MecanumConstants mecanumConstants) {
-        return setDrivetrain(new Mecanum(hardwareMap, mecanumConstants));
+    public FollowerBuilder mecanumDrivetrain(MecanumConstants mecanumConstants, PredictiveBrakingCoefficients predictiveBrakingCoefficients) {
+        return setDrivetrain(new Mecanum(hardwareMap, mecanumConstants, predictiveBrakingCoefficients));
     }
 
     public FollowerBuilder pathConstraints(PathConstraints pathConstraints) {
