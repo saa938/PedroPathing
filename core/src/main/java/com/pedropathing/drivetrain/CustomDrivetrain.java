@@ -55,18 +55,16 @@ public abstract class CustomDrivetrain extends Drivetrain {
      * @param directionOfMotion the current velocity in that direction
      * @return the clamped power
      */
-    private double clampReversePower(double power, double directionOfMotion) {
+    protected double clampReversePower(double power, double directionOfMotion) {
         boolean isOpposingMotion = directionOfMotion * power < 0;
         if (!isOpposingMotion) {
             return power;
         }
-        double clampedPower;
         if (power < 0) {
-            clampedPower = Math.max(power, -maximumBrakingPower);
+            return Math.max(power, -maximumBrakingPower);
         } else {
-            clampedPower = Math.min(power, maximumBrakingPower);
+            return Math.min(power, maximumBrakingPower);
         }
-        return clampedPower;
     }
 
     @Override
@@ -138,30 +136,35 @@ public abstract class CustomDrivetrain extends Drivetrain {
         lastHeadingPower = headingPower;
         lastHeading = robotHeading;
 
-        translationalVector.rotateVector(-robotHeading); // this should make it field centric when field centric is desired and robot centric otherwise
+        translationalVector.rotateVector(-robotHeading); // field → robot frame
         arcadeDrive(translationalVector.getXComponent(), translationalVector.getYComponent(), calculatedDrive[2]);
     }
 
     /**
-     * Follows a robot-relative vector with heading correction and velocity-aware clamping.
-     * Clamping happens here in the drivetrain layer where we have access to robot-relative velocity.
+     * Follows a robot-relative vector with heading correction and per-axis reverse-power clamping.
      *
-     * @param robotVector the robot-relative drive vector (already in robot frame)
-     * @param turnPower the turn power for heading correction
-     * @param robotVelocity the robot-relative velocity vector for reverse power clamping
+     * The robotVector arrives already in the robot frame (rotated by -heading in Follower).
+     * Pedro's convention after that rotation is:
+     *   X component = forward / backward direction
+     *   Y component = lateral (left / right) direction
+     * This matches exactly what runDrive produces before calling arcadeDrive(x, y, rot).
+     *
+     * We clamp forward against the forward velocity component and lateral against the lateral
+     * velocity component independently. Clamping along path-tangent / path-normal directions
+     * instead would spread the braking across both axes in ways that don't map cleanly to
+     * mecanum wheel pairs, causing some wheels to brake while others accelerate along the same
+     * maneuver.
+     *
+     * @param robotVector    robot-relative drive vector (X = forward, Y = lateral)
+     * @param turnPower      signed turn scalar (+CCW, -CW)
+     * @param robotVelocity  robot-relative velocity vector for per-axis reverse-power clamping
      */
     @Override
     public void followVector(Vector robotVector, double turnPower, Vector robotVelocity) {
-        // Clamp forward and lateral separately based on velocity
-        double forward = clampReversePower(
-                robotVector.getYComponent(),
-                robotVelocity.getYComponent()
-        );
-        double strafe = clampReversePower(
-                robotVector.getXComponent(),
-                robotVelocity.getXComponent()
-        );
-
+        // Pedro robot frame after rotateVector(-heading): X = forward, Y = lateral.
+        // Clamp each axis independently — forward braking should not bleed into lateral and vice versa.
+        double forward = clampReversePower(robotVector.getXComponent(), robotVelocity.getXComponent());
+        double strafe  = clampReversePower(robotVector.getYComponent(), robotVelocity.getYComponent());
         arcadeDrive(forward, strafe, turnPower);
     }
 

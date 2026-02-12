@@ -217,54 +217,34 @@ public class Mecanum extends CustomDrivetrain {
     }
 
     /**
-     * Follows a robot-relative vector with heading correction and velocity-aware clamping.
-     * This implements mecanum-specific logic including directional velocity adjustment.
+     * Follows a robot-relative vector with heading correction and per-axis reverse-power clamping.
      *
-     * @param robotVector the robot-relative drive vector
-     * @param turnPower the turn power for heading correction
-     * @param robotVelocity the robot-relative velocity vector for reverse power clamping
+     * The robotVector arrives already in the robot frame (rotated by -heading in Follower).
+     * Pedro's convention after that rotation is:
+     *   X component = forward / backward direction
+     *   Y component = lateral (left / right) direction
+     *
+     * For mecanum, forward/backward and lateral map to completely separate wheel pairs:
+     *   Forward/back:  all four wheels spin the same direction
+     *   Lateral:       diagonal pairs (FL+RR vs FR+RL) spin opposite directions
+     * Therefore the reverse-power clamp must operate on forward and lateral independently.
+     * Clamping along path-tangent / path-normal directions instead would spread braking
+     * power across both axes in proportions that don't match the mecanum geometry, causing
+     * some wheels to brake while others accelerate on the same maneuver.
+     *
+     * There is no need for a xVelocity/yVelocity ratio adjustment here — arcadeDrive already
+     * handles the mecanum mixing math correctly from forward/strafe scalars.
+     *
+     * @param robotVector    robot-relative drive vector (X = forward, Y = lateral)
+     * @param turnPower      signed turn scalar (+CCW, -CW)
+     * @param robotVelocity  robot-relative velocity vector for per-axis reverse-power clamping
      */
     @Override
     public void followVector(Vector robotVector, double turnPower, Vector robotVelocity) {
-        // Adjust for mecanum directional velocity differences
-        Vector adjusted = new Vector(
-                robotVector.getXComponent(),
-                robotVector.getYComponent() * (xVelocity() / yVelocity())
-        );
-
-        // Apply reverse power clamping separately for forward and lateral
-        double forward = clampReversePower(adjusted.getYComponent(), robotVelocity.getYComponent());
-        double strafe = clampReversePower(adjusted.getXComponent(), robotVelocity.getXComponent());
-
-        // Calculate mecanum wheel powers (Pedro convention: -Y is forward, +X is strafe right)
-        double upRight  = -forward + strafe;  // FL and BR move together
-        double downLeft = -forward - strafe;  // BL and FR move together
-
-        // Add turning (left side -, right side +)
-        double fl = upRight  - turnPower;
-        double bl = downLeft - turnPower;
-        double fr = downLeft + turnPower;
-        double br = upRight  + turnPower;
-
-        // Normalize to [-1, 1]
-        double max = Math.max(
-                Math.max(Math.abs(fl), Math.abs(bl)),
-                Math.max(Math.abs(fr), Math.abs(br))
-        );
-
-        if (max > 1.0) {
-            double scale = 1.0 / max;
-            fl *= scale;
-            bl *= scale;
-            fr *= scale;
-            br *= scale;
-        }
-
-        // Apply motor power
-        leftFront.setPower(fl);
-        leftRear.setPower(bl);
-        rightFront.setPower(fr);
-        rightRear.setPower(br);
+        // Pedro robot frame after rotateVector(-heading): X = forward, Y = lateral.
+        double forward = clampReversePower(robotVector.getXComponent(), robotVelocity.getXComponent());
+        double strafe  = clampReversePower(robotVector.getYComponent(), robotVelocity.getYComponent());
+        arcadeDrive(forward, strafe, turnPower);
     }
 
     /**
@@ -276,18 +256,16 @@ public class Mecanum extends CustomDrivetrain {
      * zero-power brake mode, using the motor's own momentum for braking without consuming
      * significant energy.
      */
-    private double clampReversePower(double power, double directionOfMotion) {
+    public double clampReversePower(double power, double directionOfMotion) {
         boolean isOpposingMotion = directionOfMotion * power < 0;
         if (!isOpposingMotion) {
             return power;
         }
-        double clampedPower;
         if (power < 0) {
-            clampedPower = Math.max(power, -maximumBrakingPower);
+            return Math.max(power, -maximumBrakingPower);
         } else {
-            clampedPower = Math.min(power, maximumBrakingPower);
+            return Math.min(power, maximumBrakingPower);
         }
-        return clampedPower;
     }
 
     /**

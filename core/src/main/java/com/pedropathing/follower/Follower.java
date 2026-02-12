@@ -475,13 +475,16 @@ public class Follower {
                 getTotalDistanceRemaining(), usePredictiveBraking);
     }
 
-    public void updateErrorAndVectors() {updateErrors(); updateVectors();}
+    public void updateErrorAndVectors() { updateErrors(); updateVectors(); }
 
     /**
-     * Allocates power within a budget, maintaining sign
-     * @param requested the requested power
-     * @param budget the maximum power budget available
-     * @return the allocated power
+     * Allocates power within a budget, maintaining sign.
+     * The sign of the requested value is always preserved — this is critical for braking
+     * (negative tangent values must remain negative to correctly trigger path skipping).
+     *
+     * @param requested the requested power (signed)
+     * @param budget the maximum power magnitude available (non-negative)
+     * @return the allocated power, clamped to budget but with original sign preserved
      */
     private double allocatePower(double requested, double budget) {
         return Math.copySign(
@@ -491,19 +494,13 @@ public class Follower {
     }
 
     /**
-     * Converts a field-relative vector to robot-relative
-     * @param fieldVector the field-relative vector
-     * @return the robot-relative vector
-     */
-    private Vector toRobotRelativeVector(Vector fieldVector) {
-        Vector rotated = fieldVector.copy();
-        rotated.rotateVector(-currentPose.getHeading());
-        return rotated;
-    }
-
-    /**
      * This calls an update to the PoseTracker, which updates the robot's current position estimate.
      * This also updates all the Follower's PIDFs using Black Ice power allocation strategy.
+     *
+     * Power priority: Translational (normal) → Heading → Drive (tangent)
+     * The drive/tangent value is NEVER taken with Math.abs — a negative value means the
+     * predictive braking controller is commanding deceleration, which is both correct motor
+     * behavior AND the signal used to advance to the next path in a chain.
      */
     public void update() {
         poseHistory.update();
@@ -515,7 +512,21 @@ public class Follower {
             previousClosestPose = closestPose;
             closestPose = new PathPoint();
             updateErrorAndVectors();
+
+            // THIS IS SO CHOPPED IN TELEOP
+            // basically one wheel is correct, 2 adjacent to correct wheel are wrong, 1 diagonal to correct doesn't move
             drivetrain.runDrive(getCentripetalForceCorrection(), getTeleopHeadingVector(), getTeleopDriveVector(), poseTracker.getPose().getHeading());
+
+            // this works better but its still chopped
+            // forward backward is fine
+            // strafes wrong way
+            // doesn't turn
+            double turnPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
+
+            Vector robotVelocity = poseTracker.getVelocity().copy();
+            robotVelocity.rotateVector(-currentPose.getHeading());
+
+            drivetrain.followVector(getTeleopDriveVector(), turnPower, robotVelocity);
             return;
         }
 
@@ -528,9 +539,14 @@ public class Follower {
             if (followingPathChain) currentPathChain.update();
             closestPose = currentPath.updateClosestPose(poseTracker.getPose(), 1);
             updateErrorAndVectors();
-            drivetrain.runDrive(useHoldScaling? getTranslationalCorrection().times(holdPointTranslationalScaling) : getTranslationalCorrection(), useHoldScaling? getHeadingVector().times(holdPointHeadingScaling) : getHeadingVector(), new Vector(), poseTracker.getPose().getHeading());
+            drivetrain.runDrive(
+                    useHoldScaling ? getTranslationalCorrection().times(holdPointTranslationalScaling) : getTranslationalCorrection(),
+                    useHoldScaling ? getHeadingVector().times(holdPointHeadingScaling) : getHeadingVector(),
+                    new Vector(),
+                    poseTracker.getPose().getHeading()
+            );
 
-            if(Math.abs(getHeadingError()) < turnHeadingErrorThreshold && isTurning) {
+            if (Math.abs(getHeadingError()) < turnHeadingErrorThreshold && isTurning) {
                 isTurning = false;
                 isBusy = false;
             }
@@ -544,53 +560,29 @@ public class Follower {
             updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
 
-            Vector position = currentPose.getAsVector();
+            // --- Black Ice ---
             Vector tangent = currentPath.getClosestPointTangentVector().normalize();
-            Vector normal = currentPath.getClosestLeftGradientVector().normalize();
-            Vector velocity = getVelocity();
+            Vector normal  = currentPath.getClosestLeftGradientVector().normalize();
 
-            // Get errors from error calculator (already signed)
-            Vector translationalError = getTranslationalError();
+            double normalPower = getCorrectiveVector().dot(normal);
+            double tangentPower = getDriveVector().dot(tangent);
+            double headingPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
 
-            // Get correction vectors from vector calculator
-            Vector translationalCorrection = vectorCalculator.getTranslationalCorrection(
-                    translationalError,
-                    currentPose
-            );
-            double normalPower = translationalCorrection.dot(normal);
+            double normalUsed  = allocatePower(normalPower,  globalMaxPower);
+            double rem1 = Math.sqrt(Math.max(0.0, globalMaxPower * globalMaxPower - normalUsed * normalUsed));
 
-            Vector driveVector = vectorCalculator.getDriveVector();
-            double tangentPower = driveVector.dot(tangent);
+            double headingUsed = allocatePower(headingPower, rem1);
+            double rem2 = Math.sqrt(Math.max(0.0, rem1 * rem1 - headingUsed * headingUsed));
 
-            // Heading correction
-            double targetHeading = getClosestPointHeadingGoal();
-            double headingError = getHeadingError();
-            double headingPower = vectorCalculator.getHeadingVector(
-                    headingError,
-                    currentPose,
-                    targetHeading
-            ).getMagnitude() * Math.signum(headingError);
-
-            // Black Ice power allocation: normal → heading → tangent
-            double maxMagnitude = globalMaxPower;
-            double normalUsed = allocatePower(normalPower, maxMagnitude);
-            double remaining = Math.sqrt(
-                    Math.max(0.0, maxMagnitude * maxMagnitude - normalUsed * normalUsed)
-            );
-            double headingUsed = allocatePower(headingPower, remaining);
-            remaining = Math.sqrt(
-                    Math.max(0.0, remaining * remaining - headingUsed * headingUsed)
-            );
-            double tangentUsed = allocatePower(tangentPower, remaining);
-
-            // Compose field-relative drive vector
+            double tangentUsed = allocatePower(tangentPower, rem2);
             Vector fieldDrivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
 
-            // Convert to robot-relative for drivetrain
-            Vector robotDrivePower = toRobotRelativeVector(fieldDrivePower);
-            Vector robotVelocity = toRobotRelativeVector(velocity);
+            Vector robotDrivePower = fieldDrivePower.copy();
+            robotDrivePower.rotateVector(-currentPose.getHeading());
 
-            // Send to drivetrain (clamping happens there)
+            Vector robotVelocity = poseTracker.getVelocity().copy();
+            robotVelocity.rotateVector(-currentPose.getHeading());
+
             drivetrain.followVector(robotDrivePower, headingUsed, robotVelocity);
         }
 
@@ -599,10 +591,9 @@ public class Follower {
             zeroVelocityDetectedTimer = new Timer();
         }
 
-        // Check if we should advance to next path using predictive braking
         boolean nextPathWithinBrakingDistance =
                 followingPathChain && chainIndex < currentPathChain.size() - 1 && usePredictiveBraking
-                        && vectorCalculator.getDriveVector().dot(getClosestPointTangentVector()) < 1;
+                        && getDriveVector().dot(getClosestPointTangentVector().normalize()) < globalMaxPower;
 
         if (!(currentPath.isAtParametricEnd()
                 || nextPathWithinBrakingDistance
