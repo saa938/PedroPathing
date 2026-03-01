@@ -389,11 +389,26 @@ public class Follower {
             }
 
             Vector fieldDrivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
+
+            // Rotate field→robot frame. Then negate Y — same convention fix as teleop.
+            // Pedro's drivetrain "left" = negative Y in robot frame, but rotateVector alone
+            // does not account for this: it produces +Y for "left" corrections, which the
+            // drivetrain interprets as "right". Without this negation, every normal
+            // correction pushes the robot AWAY from the path (confirmed in logs: normUsed
+            // grows more negative as the robot drifts further right, drive Y grows positive).
             Vector robotDrivePower = fieldDrivePower.copy();
             robotDrivePower.rotateVector(-currentPose.getHeading());
+            robotDrivePower.setOrthogonalComponents(
+                    robotDrivePower.getXComponent(),
+                    -robotDrivePower.getYComponent()
+            );
 
             Vector robotVelocity = poseTracker.getVelocity().copy();
             robotVelocity.rotateVector(-currentPose.getHeading());
+            robotVelocity.setOrthogonalComponents(
+                    robotVelocity.getXComponent(),
+                    -robotVelocity.getYComponent()
+            );
 
             // ── LOG A: main drive values (throttled) ──────────────────────────
             // Shows the raw computed powers before and after allocation.
@@ -453,9 +468,6 @@ public class Follower {
                         && usePredictiveBraking
                         && currentPath.getClosestPointTValue() > 0.85
                         && tangentDot < globalMaxPower * 0.5)
-                        + " stuckTimer=" + (zeroVelocityDetectedTimer != null
-                        ? String.format("%.0f ms", zeroVelocityDetectedTimer.getElapsedTime())
-                        : "null")
         );
 
         // tangentDot > 0 check intentionally removed:
