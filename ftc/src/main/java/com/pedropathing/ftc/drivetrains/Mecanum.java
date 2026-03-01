@@ -257,6 +257,10 @@ public class Mecanum extends CustomDrivetrain {
      * significant energy.
      */
     public double clampReversePower(double power, double directionOfMotion) {
+        if (Math.abs(directionOfMotion) < 5.0) {
+            return power;
+        }
+
         boolean isOpposingMotion = directionOfMotion * power < 0;
         if (!isOpposingMotion) {
             return power;

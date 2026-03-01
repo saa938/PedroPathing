@@ -24,17 +24,6 @@ import com.pedropathing.util.Timer;
 import java.util.ArrayDeque;
 import java.util.Queue;
 
-/**
- * This is the Follower class refactored with Black Ice power allocation strategy.
- * It prioritizes: Normal (translational) → Heading → Tangent (drive)
- * And implements reverse power clamping and improved path skipping.
- *
- * @author Baron Henderson - 20077 The Indubitables
- * @author Anyi Lin - 10158 Scott's Bots
- * @author Aaron Yang - 10158 Scott's Bots
- * @author Harrison Womack - 10158 Scott's Bots
- * @version 2.0, 2/7/2026 - Refactored with Black Ice strategy
- */
 public class Follower {
     public FollowerConstants constants;
     public PathConstraints pathConstraints;
@@ -67,13 +56,6 @@ public class Follower {
     private Runnable resetFollowing = null;
     private Queue<PathCallback> currentCallbacks;
 
-    /**
-     * This creates a new Follower given a HardwareMap.
-     * @param constants FollowerConstants to use
-     * @param localizer Localizer to use
-     * @param drivetrain Drivetrain to use
-     * @param pathConstraints PathConstraints to use
-     */
     public Follower(FollowerConstants constants, Localizer localizer, Drivetrain drivetrain, PathConstraints pathConstraints) {
         this.constants = constants;
         this.pathConstraints = pathConstraints;
@@ -105,12 +87,6 @@ public class Follower {
         this.usePredictiveBraking = !manualDrive && constants.usePredictiveBraking;
     }
 
-    /**
-     * This creates a new Follower given a HardwareMap.
-     * @param constants FollowerConstants to use
-     * @param localizer Localizer to use
-     * @param drivetrain Drivetrain to use
-     */
     public Follower(FollowerConstants constants, Localizer localizer, Drivetrain drivetrain) {
         this(constants, localizer, drivetrain, PathConstraints.defaultConstraints);
     }
@@ -119,21 +95,11 @@ public class Follower {
         centripetalScaling = set;
     }
 
-    /**
-     * This sets the maximum power the motors are allowed to use.
-     *
-     * @param set This caps the motor power from [0, 1].
-     */
     public void setMaxPower(double set) {
         globalMaxPower = set;
         drivetrain.setMaxPowerScaling(set);
     }
 
-    /**
-     * This gets a Point from the current Path from a specified t-value.
-     *
-     * @return returns the Point.
-     */
     public Pose getPointFromPath(double t) {
         if (currentPath != null) {
             return currentPath.getPoint(t);
@@ -142,73 +108,34 @@ public class Follower {
         }
     }
 
-    /**
-     * This sets the current pose in the PoseTracker without using offsets.
-     *
-     * @param pose The pose to set the current pose to.
-     */
     public void setPose(Pose pose) {
         poseTracker.setPose(pose);
     }
 
-    /**
-     * This sets the current x-position estimate of the localizer. Units are inferred from localizer constants where necessary.
-     * @param x the x-position estimate to set
-     */
     public void setX(double x) {
         poseTracker.getLocalizer().setX(x);
     }
 
-    /**
-     * This sets the current y-position estimate of the localizer. Units are inferred from localizer constants where necessary.
-     * @param y the y-position estimate to set
-     */
     public void setY(double y) {
         poseTracker.getLocalizer().setY(y);
     }
 
-    /**
-     * This sets the current heading estimate of the localizer, in radians.
-     * @param heading the heading estimate to set
-     */
     public void setHeading(double heading) {
         poseTracker.getLocalizer().setHeading(heading);
     }
 
-    /**
-     * This returns the current pose from the PoseTracker.
-     *
-     * @return returns the pose
-     */
     public Pose getPose() {
         return poseTracker.getPose();
     }
 
-    /**
-     * This returns the current velocity of the robot as a Vector.
-     *
-     * @return returns the current velocity as a Vector.
-     */
     public Vector getVelocity() {
         return poseTracker.getVelocity();
     }
 
-    /**
-     * This sets the starting pose. Do not run this after moving at all.
-     *
-     * @param pose the pose to set the starting pose to.
-     */
     public void setStartingPose(Pose pose) {
         poseTracker.setStartingPose(pose);
     }
 
-    /**
-     * This holds a Point.
-     *
-     * @param point   the Point to stay at.
-     * @param heading the heading to face.
-     * @param useHoldScaling true if you want to correct and turn slowly, false otherwise
-     */
     public void holdPoint(BezierPoint point, double heading, boolean useHoldScaling) {
         breakFollowing();
         holdingPosition = true;
@@ -221,41 +148,18 @@ public class Follower {
         closestPose = currentPath.updateClosestPose(poseTracker.getPose(), 1);
     }
 
-    /**
-     * This holds a Point.
-     *
-     * @param point   the Point to stay at.
-     * @param heading the heading to face.
-     */
     public void holdPoint(BezierPoint point, double heading) {
         holdPoint(point, heading, true);
     }
 
-    /**
-     * This holds a Point.
-     *
-     * @param pose the Point (as a Pose) to stay at.
-     */
     public void holdPoint(Pose pose) {
         holdPoint(new BezierPoint(pose), pose.getHeading());
     }
 
-    /**
-     * This holds a Point.
-     *
-     * @param pose the Point (as a Pose) to stay at.
-     */
     public void holdPoint(Pose pose, boolean useHoldScaling) {
         holdPoint(new BezierPoint(pose), pose.getHeading(), useHoldScaling);
     }
 
-    /**
-     * This follows a Path.
-     * This also makes the Follower hold the last Point on the Path.
-     *
-     * @param path the Path to follow.
-     * @param holdEnd this makes the Follower hold the last Point on the Path.
-     */
     public void followPath(Path path, boolean holdEnd) {
         drivetrain.setMaxPowerScaling(globalMaxPower);
         breakFollowing();
@@ -267,43 +171,18 @@ public class Follower {
         closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
     }
 
-    /**
-     * This follows a Path.
-     *
-     * @param path the Path to follow.
-     */
     public void followPath(Path path) {
         followPath(path, automaticHoldEnd);
     }
 
-    /**
-     * This follows a PathChain. Drive vector projection is only done on the last Path.
-     * This also makes the Follower hold the last Point on the PathChain.
-     *
-     * @param pathChain the PathChain to follow.
-     * @param holdEnd this makes the Follower hold the last Point on the PathChain.
-     */
     public void followPath(PathChain pathChain, boolean holdEnd) {
         followPath(pathChain, globalMaxPower, holdEnd);
     }
 
-    /**
-     * This follows a PathChain. Drive vector projection is only done on the last Path.
-     *
-     * @param pathChain the PathChain to follow.
-     */
     public void followPath(PathChain pathChain) {
         followPath(pathChain, automaticHoldEnd);
     }
 
-    /**
-     * This follows a PathChain. Drive vector projection is only done on the last Path.
-     * This also makes the Follower hold the last Point on the PathChain.
-     *
-     * @param pathChain the PathChain to follow.
-     * @param maxPower the max power of the Follower for this path
-     * @param holdEnd this makes the Follower hold the last Point on the PathChain.
-     */
     public void followPath(PathChain pathChain, double maxPower, boolean holdEnd) {
         drivetrain.setMaxPowerScaling(maxPower);
         breakFollowing();
@@ -323,9 +202,6 @@ public class Follower {
         }
     }
 
-    /**
-     * Resumes pathing, can only be called after pausePathFollowing()
-     */
     public void resumePathFollowing() {
         if (resetFollowing != null) {
             resetFollowing.run();
@@ -337,9 +213,6 @@ public class Follower {
         }
     }
 
-    /**
-     * Pauses pathing, can only be restarted with resumePathFollowing
-     */
     public void pausePathFollowing() {
         isBusy = false;
 
@@ -368,9 +241,6 @@ public class Follower {
         holdPoint(getPose());
     }
 
-    /**
-     * This starts teleop drive control.
-     */
     public void startTeleopDrive() {
         breakFollowing();
         manualDrive = true;
@@ -378,9 +248,6 @@ public class Follower {
         drivetrain.startTeleopDrive();
     }
 
-    /**
-     * This starts teleop drive control.
-     */
     public void startTeleopDrive(boolean useBrakeMode) {
         breakFollowing();
         manualDrive = true;
@@ -396,73 +263,36 @@ public class Follower {
         startTeleopDrive();
     }
 
-    /**
-     * This sets the Teleop drive movement vectors
-     *
-     * @param forward the forward movement
-     * @param strafe the strafe movement
-     * @param turn the turn movement
-     * @param isRobotCentric true if robot centric control, false if field centric
-     * @param offsetHeading the offset heading for field centric control, will face the direction of such heading in radians in the field coordinate system when driving forward
-     */
     public void setTeleOpDrive(double forward, double strafe, double turn, boolean isRobotCentric, double offsetHeading) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn, isRobotCentric, offsetHeading);
     }
 
-    /**
-     * This sets the Teleop drive movement vectors
-     *
-     * @param forward the forward movement
-     * @param strafe the strafe movement
-     * @param turn the turn movement
-     * @param offsetHeading the offset heading for field centric control, will face the direction of such heading in radians in the field coordinate system when driving forward
-     */
     public void setTeleOpDrive(double forward, double strafe, double turn, double offsetHeading) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn, true, offsetHeading);
     }
 
-    /**
-     * This sets the Teleop drive movement vectors
-     *
-     * @param forward the forward movement
-     * @param strafe the strafe movement
-     * @param turn the turn movement
-     * @param isRobotCentric true if robot centric control, false if field centric
-     */
     public void setTeleOpDrive(double forward, double strafe, double turn, boolean isRobotCentric) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn, isRobotCentric);
     }
 
-    /**
-     * This sets the Teleop drive movement vectors
-     * This will default to robot centric control
-     *
-     * @param forward the forward movement
-     * @param strafe the strafe movement
-     * @param turn the turn movement
-     */
     public void setTeleOpDrive(double forward, double strafe, double turn) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn);
     }
 
-    /** Updates the Mecanum constants */
     public void updateDrivetrain() {
         drivetrain.updateConstants();
     }
 
-    /** Calls an update to the PoseTracker, which updates the robot's current position estimate. */
     public void updatePose() {
         poseTracker.update();
         currentPose = poseTracker.getPose();
         poseHistory.update();
     }
 
-    /** Calls an update to the ErrorCalculator, which updates the robot's current error. */
     public void updateErrors() {
         errorCalculator.update(currentPose, currentPath, currentPathChain, followingPathChain, closestPose.getPose(), poseTracker.getVelocity(), chainIndex, drivetrain.xVelocity(), drivetrain.yVelocity(), getClosestPointHeadingGoal(), usePredictiveBraking);
     }
 
-    /** Calls an update to the VectorCalculator, which updates the robot's current vectors to correct. */
     public void updateVectors() {
         vectorCalculator.update(useDrive, useHeading, useTranslational, useCentripetal,
                 manualDrive, chainIndex,
@@ -477,15 +307,6 @@ public class Follower {
 
     public void updateErrorAndVectors() { updateErrors(); updateVectors(); }
 
-    /**
-     * Allocates power within a budget, maintaining sign.
-     * The sign of the requested value is always preserved — this is critical for braking
-     * (negative tangent values must remain negative to correctly trigger path skipping).
-     *
-     * @param requested the requested power (signed)
-     * @param budget the maximum power magnitude available (non-negative)
-     * @return the allocated power, clamped to budget but with original sign preserved
-     */
     private double allocatePower(double requested, double budget) {
         return Math.copySign(
                 Math.min(Math.abs(requested), budget),
@@ -493,15 +314,6 @@ public class Follower {
         );
     }
 
-    /**
-     * This calls an update to the PoseTracker, which updates the robot's current position estimate.
-     * This also updates all the Follower's PIDFs using Black Ice power allocation strategy.
-     *
-     * Power priority: Translational (normal) → Heading → Drive (tangent)
-     * The drive/tangent value is NEVER taken with Math.abs — a negative value means the
-     * predictive braking controller is commanding deceleration, which is both correct motor
-     * behavior AND the signal used to advance to the next path in a chain.
-     */
     public void update() {
         poseHistory.update();
         updateConstants();
@@ -513,20 +325,14 @@ public class Follower {
             closestPose = new PathPoint();
             updateErrorAndVectors();
 
-            // THIS IS SO CHOPPED IN TELEOP
-            // basically one wheel is correct, 2 adjacent to correct wheel are wrong, 1 diagonal to correct doesn't move
-            drivetrain.runDrive(getCentripetalForceCorrection(), getTeleopHeadingVector(), getTeleopDriveVector(), poseTracker.getPose().getHeading());
+            double turnPower = getTeleopHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
 
-            // this works better but its still chopped
-            // forward backward is fine
-            // strafes wrong way
-            // doesn't turn
-            double turnPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
+            Vector teleopDrive = getTeleopDriveVector().copy();
+            teleopDrive.rotateVector(-currentPose.getHeading());
+            teleopDrive.setOrthogonalComponents(teleopDrive.getXComponent(), -teleopDrive.getYComponent());
 
-            Vector robotVelocity = poseTracker.getVelocity().copy();
-            robotVelocity.rotateVector(-currentPose.getHeading());
+            drivetrain.followVector(teleopDrive, turnPower, new Vector());
 
-            drivetrain.followVector(getTeleopDriveVector(), turnPower, robotVelocity);
             return;
         }
 
@@ -560,21 +366,36 @@ public class Follower {
             updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
 
-            // --- Black Ice ---
             Vector tangent = currentPath.getClosestPointTangentVector().normalize();
             Vector normal  = currentPath.getClosestLeftGradientVector().normalize();
 
-            double normalPower = getCorrectiveVector().dot(normal);
+            double normalPower  = getCorrectiveVector().dot(normal);
             double tangentPower = getDriveVector().dot(tangent);
             double headingPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
 
-            double normalUsed  = allocatePower(normalPower,  globalMaxPower);
+            // PRIORITIZE NORMAL -> HEADING -> TANGENT
+            // Translational correction (normal) should get first shot at the budget so we don't starve lateral corrections.
+            double normalUsed  = allocatePower(normalPower, globalMaxPower);
             double rem1 = Math.sqrt(Math.max(0.0, globalMaxPower * globalMaxPower - normalUsed * normalUsed));
 
             double headingUsed = allocatePower(headingPower, rem1);
             double rem2 = Math.sqrt(Math.max(0.0, rem1 * rem1 - headingUsed * headingUsed));
 
             double tangentUsed = allocatePower(tangentPower, rem2);
+
+            // Small deadband: avoid tiny opposing tangential commands that provoke clampReversePower.
+            // This prevents slow drift caused by aggressive small reverse-clamps.
+            final double TANGENT_DEADBAND = 0.12;
+            if (Math.abs(tangentUsed) < TANGENT_DEADBAND) {
+                tangentUsed = 0.0;
+            }
+
+            // If we've reached the parametric end, stop applying tangential corrections entirely
+            // so the robot can settle using translational/heading controllers only.
+            if (reachedParametricPathEnd || (currentPath != null && currentPath.getClosestPointTValue() > 0.98)) {
+                tangentUsed = 0.0;
+            }
+
             Vector fieldDrivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
 
             Vector robotDrivePower = fieldDrivePower.copy();
@@ -591,9 +412,14 @@ public class Follower {
             zeroVelocityDetectedTimer = new Timer();
         }
 
+        double tangentDot = getDriveVector().dot(getClosestPointTangentVector().normalize());
         boolean nextPathWithinBrakingDistance =
-                followingPathChain && chainIndex < currentPathChain.size() - 1 && usePredictiveBraking
-                        && getDriveVector().dot(getClosestPointTangentVector().normalize()) < globalMaxPower;
+                followingPathChain
+                        && chainIndex < currentPathChain.size() - 1
+                        && usePredictiveBraking
+                        && currentPath.getClosestPointTValue() > 0.95       // tighter threshold
+                        && tangentDot > 0.05                                 // require meaningful forward component
+                        && tangentDot < globalMaxPower * 0.6;                // stricter bound so we really are braking
 
         if (!(currentPath.isAtParametricEnd()
                 || nextPathWithinBrakingDistance
@@ -643,9 +469,6 @@ public class Follower {
         }
     }
 
-    /**
-     * Advances to the next path in the chain and updates immediately
-     */
     private void advanceToNextPath() {
         breakFollowing();
         isBusy = true;
@@ -663,7 +486,6 @@ public class Follower {
         }
     }
 
-    /** This checks if any PathCallbacks should be run right now, and runs them if applicable. */
     public void updateCallbacks() {
         for (PathCallback callback : currentCallbacks) {
             if (callback.isReady()) {
@@ -672,7 +494,6 @@ public class Follower {
         }
     }
 
-    /** This resets the PIDFs and stops following the current Path. */
     public void breakFollowing() {
         errorCalculator.breakFollowing();
         vectorCalculator.breakFollowing();
@@ -685,18 +506,11 @@ public class Follower {
         zeroVelocityDetectedTimer = null;
     }
 
-    public boolean isBusy() {
-        return isBusy;
-    }
-
-    public PathPoint getClosestPose() {
-        return closestPose;
-    }
+    public boolean isBusy() { return isBusy; }
+    public PathPoint getClosestPose() { return closestPose; }
 
     public boolean atParametricEnd() {
-        if (currentPath == null){
-            return true;
-        }
+        if (currentPath == null){ return true; }
         if (followingPathChain) {
             if (chainIndex == currentPathChain.size() - 1) return currentPath.isAtParametricEnd();
             return false;
@@ -714,34 +528,15 @@ public class Follower {
         return chainIndex;
     }
 
-    public PathBuilder pathBuilder(PathConstraints constraints) {
-        return new PathBuilder(this, constraints);
-    }
-
-    public PathBuilder pathBuilder() {
-        return new PathBuilder(this);
-    }
-
-    public double getTotalHeading() {
-        return poseTracker.getTotalHeading();
-    }
-
-    public Path getCurrentPath() {
-        return currentPath;
-    }
-
-    public boolean isRobotStuck() {
-        return zeroVelocityDetectedTimer != null;
-    }
-
-    public boolean isLocalizationNAN() {
-        return poseTracker.getLocalizer().isNAN();
-    }
+    public PathBuilder pathBuilder(PathConstraints constraints) { return new PathBuilder(this, constraints); }
+    public PathBuilder pathBuilder() { return new PathBuilder(this); }
+    public double getTotalHeading() { return poseTracker.getTotalHeading(); }
+    public Path getCurrentPath() { return currentPath; }
+    public boolean isRobotStuck() { return zeroVelocityDetectedTimer != null; }
+    public boolean isLocalizationNAN() { return poseTracker.getLocalizer().isNAN(); }
 
     @Deprecated
-    public void turn(double radians, boolean isLeft) {
-        turn(isLeft ? radians : -radians);
-    }
+    public void turn(double radians, boolean isLeft) { turn(isLeft ? radians : -radians); }
 
     public void turn(double radians) {
         Pose temp = new Pose(getPose().getX(), getPose().getY(), getPose().getHeading() + radians);
@@ -757,18 +552,12 @@ public class Follower {
     }
 
     @Deprecated
-    public void turnToDegrees(double degrees) {
-        turnTo(Math.toRadians(degrees));
-    }
+    public void turnToDegrees(double degrees) { turnTo(Math.toRadians(degrees)); }
 
     @Deprecated
-    public void turnDegrees(double degrees, boolean isLeft) {
-        turn(Math.toRadians(degrees), isLeft);
-    }
+    public void turnDegrees(double degrees, boolean isLeft) { turn(Math.toRadians(degrees), isLeft); }
 
-    public boolean isTurning() {
-        return isTurning;
-    }
+    public boolean isTurning() { return isTurning; }
 
     public boolean atPose(Pose pose, double xTolerance, double yTolerance, double headingTolerance) {
         return Math.abs(pose.getX() - getPose().getX()) < xTolerance && Math.abs(pose.getY() - getPose().getY()) < yTolerance && Math.abs(pose.getHeading() - getPose().getHeading()) < headingTolerance;
@@ -778,14 +567,8 @@ public class Follower {
         return Math.abs(pose.getX() - getPose().getX()) < xTolerance && Math.abs(pose.getY() - getPose().getY()) < yTolerance;
     }
 
-    public void setMaxPowerScaling(double maxPowerScaling) {
-        drivetrain.setMaxPowerScaling(maxPowerScaling);
-    }
-
-    public double getMaxPowerScaling() {
-        return drivetrain.getMaxPowerScaling();
-    }
-
+    public void setMaxPowerScaling(double maxPowerScaling) { drivetrain.setMaxPowerScaling(maxPowerScaling); }
+    public double getMaxPowerScaling() { return drivetrain.getMaxPowerScaling(); }
     public boolean getUseDrive() { return useDrive; }
     public boolean getUseHeading() { return useHeading; }
     public boolean getUseTranslational() { return useTranslational; }
@@ -905,42 +688,18 @@ public class Follower {
         return info;
     }
 
-    public Vector getAcceleration() {
-        return poseTracker.getAcceleration();
-    }
-
-    public double getAngularVelocity() {
-        return poseTracker.getAngularVelocity();
-    }
-
-    private void setPath(Path path) {
-        this.currentPath = path;
-        currentPath.init();
-    }
-
-    public PathPoint getPreviousClosestPose() {
-        return previousClosestPose;
-    }
-
-    public double getTangentialVelocity() {
-        return getVelocity().dot(getClosestPointTangentVector().normalize());
-    }
-
-    public double getHeading() {
-        return getPose().getHeading();
-    }
+    public Vector getAcceleration() { return poseTracker.getAcceleration(); }
+    public double getAngularVelocity() { return poseTracker.getAngularVelocity(); }
+    private void setPath(Path path) { this.currentPath = path; currentPath.init(); }
+    public PathPoint getPreviousClosestPose() { return previousClosestPose; }
+    public double getTangentialVelocity() { return getVelocity().dot(getClosestPointTangentVector().normalize()); }
+    public double getHeading() { return getPose().getHeading(); }
 
     public double getTotalDistanceRemaining() {
-        if (currentPath == null) {
-            return 0;
-        }
-        if (!followingPathChain) {
-            return currentPath.getDistanceRemaining();
-        }
+        if (currentPath == null) { return 0; }
+        if (!followingPathChain) { return currentPath.getDistanceRemaining(); }
         PathChain.DecelerationType type = currentPathChain.getDecelerationType();
-        if (type == PathChain.DecelerationType.NONE) {
-            return -1;
-        }
+        if (type == PathChain.DecelerationType.NONE) { return -1; }
         return currentPathChain.getDistanceRemaining(chainIndex);
     }
 }
