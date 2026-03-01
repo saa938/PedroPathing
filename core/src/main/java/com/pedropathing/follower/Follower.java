@@ -21,7 +21,6 @@ import com.pedropathing.paths.PathChain;
 import com.pedropathing.math.Vector;
 import com.pedropathing.util.Timer;
 
-import java.util.ArrayDeque;
 import java.util.Queue;
 
 public class Follower {
@@ -47,6 +46,8 @@ public class Follower {
     private double holdPointHeadingScaling;
     private double turnHeadingErrorThreshold;
     private long reachedParametricPathEndTime;
+    private long lastPathAdvanceTime = 0;
+    public double normalAuthority = 0.8; // Tune: lower → more braking budget, higher → tighter path tracking
     public boolean useTranslational = true;
     public boolean useCentripetal = true;
     public boolean useHeading = true;
@@ -55,6 +56,28 @@ public class Follower {
     private Timer zeroVelocityDetectedTimer = null;
     private Runnable resetFollowing = null;
     private Queue<PathCallback> currentCallbacks;
+
+    // ── logging ──────────────────────────────────────────────────────────────
+    // Throttle: only print once every LOG_INTERVAL_MS so the logcat isn't flooded.
+    private static final long LOG_INTERVAL_MS = 100;
+    private long lastLogTime = 0;
+
+    private void log(String tag, String msg) {
+        System.out.println("[PEDRO/" + tag + "] " + msg);
+    }
+
+    /**
+     * Throttled log — fires at most once per LOG_INTERVAL_MS.
+     * Use for values that change every loop (powers, errors, t-values).
+     */
+    private void logThrottled(String tag, String msg) {
+        long now = System.currentTimeMillis();
+        if (now - lastLogTime >= LOG_INTERVAL_MS) {
+            lastLogTime = now;
+            log(tag, msg);
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     public Follower(FollowerConstants constants, Localizer localizer, Drivetrain drivetrain, PathConstraints pathConstraints) {
         this.constants = constants;
@@ -91,9 +114,7 @@ public class Follower {
         this(constants, localizer, drivetrain, PathConstraints.defaultConstraints);
     }
 
-    public void setCentripetalScaling(double set) {
-        centripetalScaling = set;
-    }
+    public void setCentripetalScaling(double set) { centripetalScaling = set; }
 
     public void setMaxPower(double set) {
         globalMaxPower = set;
@@ -101,40 +122,17 @@ public class Follower {
     }
 
     public Pose getPointFromPath(double t) {
-        if (currentPath != null) {
-            return currentPath.getPoint(t);
-        } else {
-            return null;
-        }
+        if (currentPath != null) return currentPath.getPoint(t);
+        return null;
     }
 
-    public void setPose(Pose pose) {
-        poseTracker.setPose(pose);
-    }
-
-    public void setX(double x) {
-        poseTracker.getLocalizer().setX(x);
-    }
-
-    public void setY(double y) {
-        poseTracker.getLocalizer().setY(y);
-    }
-
-    public void setHeading(double heading) {
-        poseTracker.getLocalizer().setHeading(heading);
-    }
-
-    public Pose getPose() {
-        return poseTracker.getPose();
-    }
-
-    public Vector getVelocity() {
-        return poseTracker.getVelocity();
-    }
-
-    public void setStartingPose(Pose pose) {
-        poseTracker.setStartingPose(pose);
-    }
+    public void setPose(Pose pose) { poseTracker.setPose(pose); }
+    public void setX(double x) { poseTracker.getLocalizer().setX(x); }
+    public void setY(double y) { poseTracker.getLocalizer().setY(y); }
+    public void setHeading(double heading) { poseTracker.getLocalizer().setHeading(heading); }
+    public Pose getPose() { return poseTracker.getPose(); }
+    public Vector getVelocity() { return poseTracker.getVelocity(); }
+    public void setStartingPose(Pose pose) { poseTracker.setStartingPose(pose); }
 
     public void holdPoint(BezierPoint point, double heading, boolean useHoldScaling) {
         breakFollowing();
@@ -148,17 +146,9 @@ public class Follower {
         closestPose = currentPath.updateClosestPose(poseTracker.getPose(), 1);
     }
 
-    public void holdPoint(BezierPoint point, double heading) {
-        holdPoint(point, heading, true);
-    }
-
-    public void holdPoint(Pose pose) {
-        holdPoint(new BezierPoint(pose), pose.getHeading());
-    }
-
-    public void holdPoint(Pose pose, boolean useHoldScaling) {
-        holdPoint(new BezierPoint(pose), pose.getHeading(), useHoldScaling);
-    }
+    public void holdPoint(BezierPoint point, double heading) { holdPoint(point, heading, true); }
+    public void holdPoint(Pose pose) { holdPoint(new BezierPoint(pose), pose.getHeading()); }
+    public void holdPoint(Pose pose, boolean useHoldScaling) { holdPoint(new BezierPoint(pose), pose.getHeading(), useHoldScaling); }
 
     public void followPath(Path path, boolean holdEnd) {
         drivetrain.setMaxPowerScaling(globalMaxPower);
@@ -169,19 +159,13 @@ public class Follower {
         setPath(path);
         previousClosestPose = closestPose;
         closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
+        log("followPath", "Started single path. holdEnd=" + holdEnd);
     }
 
-    public void followPath(Path path) {
-        followPath(path, automaticHoldEnd);
-    }
+    public void followPath(Path path) { followPath(path, automaticHoldEnd); }
 
-    public void followPath(PathChain pathChain, boolean holdEnd) {
-        followPath(pathChain, globalMaxPower, holdEnd);
-    }
-
-    public void followPath(PathChain pathChain) {
-        followPath(pathChain, automaticHoldEnd);
-    }
+    public void followPath(PathChain pathChain, boolean holdEnd) { followPath(pathChain, globalMaxPower, holdEnd); }
+    public void followPath(PathChain pathChain) { followPath(pathChain, automaticHoldEnd); }
 
     public void followPath(PathChain pathChain, double maxPower, boolean holdEnd) {
         drivetrain.setMaxPowerScaling(maxPower);
@@ -196,10 +180,9 @@ public class Follower {
         closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
         currentPathChain.resetCallbacks();
         currentCallbacks = currentPathChain.getNextPathCallbacks(chainIndex);
-
-        for (PathCallback callback : currentCallbacks) {
-            callback.initialize();
-        }
+        for (PathCallback callback : currentCallbacks) callback.initialize();
+        log("followPath", "Started PathChain. size=" + pathChain.size()
+                + " maxPower=" + maxPower + " holdEnd=" + holdEnd);
     }
 
     public void resumePathFollowing() {
@@ -215,13 +198,10 @@ public class Follower {
 
     public void pausePathFollowing() {
         isBusy = false;
-
         boolean prevHoldEnd = holdPositionAtEnd;
-
         if (followingPathChain && currentPathChain != null) {
             PathChain lastChain = currentPathChain;
             int lastIndex = chainIndex;
-
             resetFollowing = () -> {
                 followingPathChain = true;
                 chainIndex = lastIndex;
@@ -231,13 +211,11 @@ public class Follower {
             };
         } else if (currentPath != null) {
             Path lastPath = currentPath;
-
             resetFollowing = () -> {
                 holdPositionAtEnd = prevHoldEnd;
                 currentPath = lastPath;
             };
         }
-
         holdPoint(getPose());
     }
 
@@ -255,33 +233,23 @@ public class Follower {
         drivetrain.startTeleopDrive(useBrakeMode);
     }
 
-    public void startTeleOpDrive(boolean useBrakeMode) {
-        startTeleopDrive(useBrakeMode);
-    }
-
-    public void startTeleOpDrive() {
-        startTeleopDrive();
-    }
+    public void startTeleOpDrive(boolean useBrakeMode) { startTeleopDrive(useBrakeMode); }
+    public void startTeleOpDrive() { startTeleopDrive(); }
 
     public void setTeleOpDrive(double forward, double strafe, double turn, boolean isRobotCentric, double offsetHeading) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn, isRobotCentric, offsetHeading);
     }
-
     public void setTeleOpDrive(double forward, double strafe, double turn, double offsetHeading) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn, true, offsetHeading);
     }
-
     public void setTeleOpDrive(double forward, double strafe, double turn, boolean isRobotCentric) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn, isRobotCentric);
     }
-
     public void setTeleOpDrive(double forward, double strafe, double turn) {
         vectorCalculator.setTeleOpMovementVectors(forward, strafe, turn);
     }
 
-    public void updateDrivetrain() {
-        drivetrain.updateConstants();
-    }
+    public void updateDrivetrain() { drivetrain.updateConstants(); }
 
     public void updatePose() {
         poseTracker.update();
@@ -290,7 +258,10 @@ public class Follower {
     }
 
     public void updateErrors() {
-        errorCalculator.update(currentPose, currentPath, currentPathChain, followingPathChain, closestPose.getPose(), poseTracker.getVelocity(), chainIndex, drivetrain.xVelocity(), drivetrain.yVelocity(), getClosestPointHeadingGoal(), usePredictiveBraking);
+        errorCalculator.update(currentPose, currentPath, currentPathChain, followingPathChain,
+                closestPose.getPose(), poseTracker.getVelocity(), chainIndex,
+                drivetrain.xVelocity(), drivetrain.yVelocity(),
+                getClosestPointHeadingGoal(), usePredictiveBraking);
     }
 
     public void updateVectors() {
@@ -299,19 +270,15 @@ public class Follower {
                 drivetrain.getMaxPowerScaling(), followingPathChain,
                 centripetalScaling, currentPose, closestPose.getPose(),
                 poseTracker.getVelocity(), currentPath,
-                currentPathChain, useDrive && !holdingPosition ?
-                        getDriveError() : -1, getTranslationalError(),
-                getHeadingError(), getClosestPointHeadingGoal(),
+                currentPathChain, useDrive && !holdingPosition ? getDriveError() : -1,
+                getTranslationalError(), getHeadingError(), getClosestPointHeadingGoal(),
                 getTotalDistanceRemaining(), usePredictiveBraking);
     }
 
     public void updateErrorAndVectors() { updateErrors(); updateVectors(); }
 
     private double allocatePower(double requested, double budget) {
-        return Math.copySign(
-                Math.min(Math.abs(requested), budget),
-                requested
-        );
+        return Math.copySign(Math.min(Math.abs(requested), budget), requested);
     }
 
     public void update() {
@@ -326,19 +293,14 @@ public class Follower {
             updateErrorAndVectors();
 
             double turnPower = getTeleopHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
-
             Vector teleopDrive = getTeleopDriveVector().copy();
             teleopDrive.rotateVector(-currentPose.getHeading());
             teleopDrive.setOrthogonalComponents(teleopDrive.getXComponent(), -teleopDrive.getYComponent());
-
             drivetrain.followVector(teleopDrive, turnPower, new Vector());
-
             return;
         }
 
-        if (currentPath == null) {
-            return;
-        }
+        if (currentPath == null) return;
 
         if (holdingPosition) {
             previousClosestPose = closestPose;
@@ -351,7 +313,6 @@ public class Follower {
                     new Vector(),
                     poseTracker.getPose().getHeading()
             );
-
             if (Math.abs(getHeadingError()) < turnHeadingErrorThreshold && isTurning) {
                 isTurning = false;
                 isBusy = false;
@@ -366,60 +327,147 @@ public class Follower {
             updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
 
+            // ── path-local frame vectors ──────────────────────────────────────
             Vector tangent = currentPath.getClosestPointTangentVector().normalize();
             Vector normal  = currentPath.getClosestLeftGradientVector().normalize();
 
-            double normalPower  = getCorrectiveVector().dot(normal);
-            double tangentPower = getDriveVector().dot(tangent);
+            // normalAuthority scales the raw PID output before allocation — the true
+            // Black Ice approach. This is NOT a hard cap on the budget ceiling.
+            // Multiplying the request means: even when the PID is "flooring it" to
+            // correct a large lateral error, it only ever *asks* for normalAuthority
+            // fraction of the total budget. The Pythagorean remainder is then always
+            // available for tangent (braking). A hard cap on the budget (the previous
+            // approach) caused the PID to saturate silently — it still asked for 1.0
+            // but got 0.7, so integral windup kept driving normalPower higher without
+            // the robot responding more strongly. Scaling the request instead keeps the
+            // PID honest: the motors reflect the actual scaled demand.
+            //
+            // Tune normalAuthority:
+            //   Too high (→1.0): robot tracks path tightly but overshoots end.
+            //   Too low  (→0.0): robot brakes well but drifts far from the path.
+            //   Start at 0.8 and adjust in 0.05 steps.
+            double normalPower  = getCorrectiveVector().dot(normal) * normalAuthority;
+            // On intermediate paths in a chain, clamp tangent to >= 0.
+            // A negative tangent means the drive PID wants to reverse the robot back
+            // to a point it already passed. Allowing that causes the "go forward then
+            // backward" symptom: the robot overshoots by an inch, tangentPower goes
+            // negative, and the robot drives backward instead of advancing to path N+1.
+            // On the final path (or single path), allow negative tangent so the braking
+            // controller can settle precisely at the endpoint.
+            double rawTangentPower = getDriveVector().dot(tangent);
+            boolean isIntermediatePath = followingPathChain && chainIndex < currentPathChain.size() - 1;
+            double tangentPower = isIntermediatePath ? Math.max(0.0, rawTangentPower) : rawTangentPower;
             double headingPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
 
-            // PRIORITIZE NORMAL -> HEADING -> TANGENT
-            // Translational correction (normal) should get first shot at the budget so we don't starve lateral corrections.
+            // ── Black Ice allocation: NORMAL → HEADING → TANGENT ────────────
+            // This is the original Black Ice priority order and must not be changed.
+            //
+            // Why heading before tangent:
+            //   Tangent power saturates at globalMaxPower (drive PID is tuned aggressively).
+            //   If tangent runs before heading, it will always consume the full rem1 budget
+            //   leaving zero for heading, causing the robot to never correct its angle.
+            //   With heading before tangent, heading gets its (small) slice first, and
+            //   tangent gets everything left — which is almost as much as rem1 anyway
+            //   because headingPower is typically small (<0.2).
+            //
+            // Why normalAuthority (scalar) not tangentAuthority:
+            //   Applying authority to tangent scales down the braking signal, causing the
+            //   robot to arrive at the path end at higher speed and overshoot more.
+            //   normalAuthority on normal is safe because lateral correction doesn't
+            //   need to be as aggressive as forward drive — slight drift is acceptable.
+            //   DO NOT add tangentAuthority. It breaks braking.
             double normalUsed  = allocatePower(normalPower, globalMaxPower);
             double rem1 = Math.sqrt(Math.max(0.0, globalMaxPower * globalMaxPower - normalUsed * normalUsed));
-
+            // Heading gets priority 2 — it takes its small slice before tangent
             double headingUsed = allocatePower(headingPower, rem1);
             double rem2 = Math.sqrt(Math.max(0.0, rem1 * rem1 - headingUsed * headingUsed));
-
+            // Tangent gets what's left — still nearly all of rem1 since headingPower is small
             double tangentUsed = allocatePower(tangentPower, rem2);
 
-            // Small deadband: avoid tiny opposing tangential commands that provoke clampReversePower.
-            // This prevents slow drift caused by aggressive small reverse-clamps.
-            final double TANGENT_DEADBAND = 0.12;
-            if (Math.abs(tangentUsed) < TANGENT_DEADBAND) {
-                tangentUsed = 0.0;
-            }
-
-            // If we've reached the parametric end, stop applying tangential corrections entirely
-            // so the robot can settle using translational/heading controllers only.
-            if (reachedParametricPathEnd || (currentPath != null && currentPath.getClosestPointTValue() > 0.98)) {
+            if (reachedParametricPathEnd || currentPath.getClosestPointTValue() > 0.98) {
                 tangentUsed = 0.0;
             }
 
             Vector fieldDrivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
-
             Vector robotDrivePower = fieldDrivePower.copy();
             robotDrivePower.rotateVector(-currentPose.getHeading());
 
             Vector robotVelocity = poseTracker.getVelocity().copy();
             robotVelocity.rotateVector(-currentPose.getHeading());
 
+            // ── LOG A: main drive values (throttled) ──────────────────────────
+            // Shows the raw computed powers before and after allocation.
+            // If normalPower is huge but normalUsed is small → budget is starved by heading/tangent.
+            // If tangentPower > 0 but tangentUsed = 0 → deadband or reachedParametricPathEnd zeroing it.
+            // robotDrivePower X = forward/back in robot frame, Y = lateral.
+            logThrottled("DRIVE",
+                    "t=" + String.format("%.3f", currentPath.getClosestPointTValue())
+                            + " normPwr=" + String.format("%.3f", normalPower)
+                            + " normUsed=" + String.format("%.3f", normalUsed)
+                            + " rawTan=" + String.format("%.3f", rawTangentPower)
+                            + " tanPwr=" + String.format("%.3f", tangentPower)
+                            + " tanUsed=" + String.format("%.3f", tangentUsed)
+                            + " hdgPwr=" + String.format("%.3f", headingPower)
+                            + " hdgUsed=" + String.format("%.3f", headingUsed)
+                            + " rem1=" + String.format("%.3f", rem1)
+                            + " rem2=" + String.format("%.3f", rem2)
+                            + " drive=[" + String.format("%.3f", robotDrivePower.getXComponent())
+                            + "," + String.format("%.3f", robotDrivePower.getYComponent()) + "]"
+                            + " vel=[" + String.format("%.3f", robotVelocity.getXComponent())
+                            + "," + String.format("%.3f", robotVelocity.getYComponent()) + "]"
+                            + " isInter=" + isIntermediatePath
+                            + " reachedEnd=" + reachedParametricPathEnd
+            );
+
             drivetrain.followVector(robotDrivePower, headingUsed, robotVelocity);
         }
 
+        // ── LOG B: stuck-detection trigger ────────────────────────────────────
+        // Fires once when the timer starts. If you see this and then the robot still
+        // doesn't stop, the timeout (500 ms) is either expiring and doing the right
+        // thing, or the timer isn't being checked below.
         if (poseTracker.getVelocity().getMagnitude() < 1.0 && currentPath.getClosestPointTValue() > 0.8
                 && zeroVelocityDetectedTimer == null && isBusy) {
             zeroVelocityDetectedTimer = new Timer();
+            log("STUCK", "Zero-velocity timer started. t="
+                    + String.format("%.3f", currentPath.getClosestPointTValue())
+                    + " vel=" + String.format("%.3f", poseTracker.getVelocity().getMagnitude()));
         }
 
+        // ── path-skip / end condition ─────────────────────────────────────────
         double tangentDot = getDriveVector().dot(getClosestPointTangentVector().normalize());
+
+        // ── LOG C: path-skip inputs (throttled) ───────────────────────────────
+        // Shows every value that feeds the skip condition.
+        // tangentDot should be near globalMaxPower while driving and drop below
+        // globalMaxPower*0.5 only when truly braking.
+        // If tangentDot is already < globalMaxPower*0.5 at t=0 → premature skip.
+        logThrottled("SKIP",
+                "chainIdx=" + chainIndex
+                        + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
+                        + " tangentDot=" + String.format("%.3f", tangentDot)
+                        + " threshold=" + String.format("%.3f", globalMaxPower * 0.5)
+                        + " isAtEnd=" + currentPath.isAtParametricEnd()
+                        + " nextPathWithin="
+                        + (followingPathChain && chainIndex < currentPathChain.size() - 1
+                        && usePredictiveBraking
+                        && currentPath.getClosestPointTValue() > 0.85
+                        && tangentDot < globalMaxPower * 0.5)
+                        + " stuckTimer=" + (zeroVelocityDetectedTimer != null
+                        ? String.format("%.0f ms", zeroVelocityDetectedTimer.getElapsedTime())
+                        : "null")
+        );
+
+        // tangentDot > 0 check intentionally removed:
+        // If the robot overshoots (tangentDot goes negative), we still want to advance
+        // to the next path rather than driving backward to re-approach. The t > 0.85
+        // guard ensures we only skip when genuinely near the end, not at the start.
         boolean nextPathWithinBrakingDistance =
                 followingPathChain
                         && chainIndex < currentPathChain.size() - 1
                         && usePredictiveBraking
-                        && currentPath.getClosestPointTValue() > 0.95       // tighter threshold
-                        && tangentDot > 0.05                                 // require meaningful forward component
-                        && tangentDot < globalMaxPower * 0.6;                // stricter bound so we really are braking
+                        && currentPath.getClosestPointTValue() > 0.85
+                        && tangentDot < globalMaxPower * 0.5;
 
         if (!(currentPath.isAtParametricEnd()
                 || nextPathWithinBrakingDistance
@@ -429,41 +477,90 @@ public class Follower {
         }
 
         if (followingPathChain && chainIndex < currentPathChain.size() - 1) {
+            // ── LOG D: path advance ───────────────────────────────────────────
+            // Fires exactly once per path transition.
+            // If you see this firing before the robot has visibly reached the path end
+            // → the skip condition is triggering too early (check LOG C tangentDot values).
+            log("ADVANCE", "Advancing from path " + chainIndex + " → " + (chainIndex + 1)
+                    + " reason: isAtEnd=" + currentPath.isAtParametricEnd()
+                    + " nextWithin=" + nextPathWithinBrakingDistance
+                    + " stuck=" + (zeroVelocityDetectedTimer != null
+                    && zeroVelocityDetectedTimer.getElapsedTime() > 500.0)
+                    + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
+                    + " tangentDot=" + String.format("%.3f", tangentDot));
             advanceToNextPath();
             return;
         }
 
         if (!reachedParametricPathEnd) {
+            long timeSinceAdvance = System.currentTimeMillis() - lastPathAdvanceTime;
+            if (timeSinceAdvance < 100) {
+                log("END-GUARD", "Skipping reachedParametricPathEnd set — too soon after advance ("
+                        + timeSinceAdvance + " ms)");
+                return;
+            }
             reachedParametricPathEnd = true;
             reachedParametricPathEndTime = System.currentTimeMillis();
+            // ── LOG E: parametric end reached ────────────────────────────────
+            // Fires once when the robot is considered "at the end" of the last path.
+            // After this, tangentUsed is forced to 0 (see LOG A).
+            // If the robot is still moving sideways after this → normal correction is
+            // the culprit (normalPower non-zero and perpendicular to intended direction).
+            log("END", "reachedParametricPathEnd=true"
+                    + " pos=[" + String.format("%.2f", currentPose.getX())
+                    + "," + String.format("%.2f", currentPose.getY()) + "]"
+                    + " vel=" + String.format("%.3f", poseTracker.getVelocity().getMagnitude())
+                    + " t=" + String.format("%.3f", currentPath.getClosestPointTValue()));
         }
 
         updateErrorAndVectors();
-        if (!(
-                (
-                        System.currentTimeMillis() - reachedParametricPathEndTime
-                                > currentPath.getPathEndTimeoutConstraint()
-                )
-                        || (
-                        poseTracker.getVelocity().getMagnitude()
-                                < currentPath.getPathEndVelocityConstraint()
-                )
-                        && (
-                        poseTracker.getPose().distanceFrom(closestPose.getPose())
-                                < currentPath.getPathEndTranslationalConstraint()
-                )
-                        && (
-                        MathFunctions.getSmallestAngleDifference(poseTracker.getPose().getHeading(), getClosestPointHeadingGoal())
-                                < currentPath.getPathEndHeadingConstraint()
-                )
-        )) {
-            return;
-        }
+
+        double velMag    = poseTracker.getVelocity().getMagnitude();
+        double transDist = poseTracker.getPose().distanceFrom(closestPose.getPose());
+        double headingErr = MathFunctions.getSmallestAngleDifference(
+                poseTracker.getPose().getHeading(), getClosestPointHeadingGoal());
+        long   msAtEnd   = System.currentTimeMillis() - reachedParametricPathEndTime;
+
+        // ── LOG F: end-constraint check (throttled) ───────────────────────────
+        // Shows every value checked to decide when the path is "done".
+        // velMag must be < getPathEndVelocityConstraint()
+        // transDist must be < getPathEndTranslationalConstraint()
+        // headingErr must be < getPathEndHeadingConstraint()
+        // OR msAtEnd > getPathEndTimeoutConstraint() to force-finish.
+        // If the robot is drifting and these never pass → normal correction is
+        // adding lateral velocity faster than the constraints allow it to expire.
+        logThrottled("END-CHECK",
+                "msAtEnd=" + msAtEnd
+                        + " timeout=" + currentPath.getPathEndTimeoutConstraint()
+                        + " velMag=" + String.format("%.3f", velMag)
+                        + " velLimit=" + String.format("%.3f", currentPath.getPathEndVelocityConstraint())
+                        + " transDist=" + String.format("%.3f", transDist)
+                        + " transLimit=" + String.format("%.3f", currentPath.getPathEndTranslationalConstraint())
+                        + " headErr=" + String.format("%.4f", headingErr)
+                        + " headLimit=" + String.format("%.4f", currentPath.getPathEndHeadingConstraint())
+        );
+
+        boolean timeoutDone  = msAtEnd > currentPath.getPathEndTimeoutConstraint();
+        boolean constraintsDone = velMag  < currentPath.getPathEndVelocityConstraint()
+                && transDist < currentPath.getPathEndTranslationalConstraint()
+                && headingErr < currentPath.getPathEndHeadingConstraint();
+
+        if (!timeoutDone && !constraintsDone) return;
+
+        // ── LOG G: path complete ──────────────────────────────────────────────
+        // Fires once when the path is declared done.
+        // "timeout" means it finished because time ran out (constraints weren't met).
+        // "constraints" means it settled cleanly.
+        log("DONE", "Path complete. reason=" + (timeoutDone ? "timeout" : "constraints")
+                + " holdPositionAtEnd=" + holdPositionAtEnd);
 
         if (holdPositionAtEnd) {
             holdPositionAtEnd = false;
-            if (followingPathChain) holdPoint(new BezierPoint(currentPath.getLastControlPoint()), currentPathChain.getHeadingGoal(new PathChain.PathT(currentPathChain.size() - 1, 1)));
-            else holdPoint(new BezierPoint(currentPath.getLastControlPoint()), currentPath.getHeadingGoal(1));
+            if (followingPathChain)
+                holdPoint(new BezierPoint(currentPath.getLastControlPoint()),
+                        currentPathChain.getHeadingGoal(new PathChain.PathT(currentPathChain.size() - 1, 1)));
+            else
+                holdPoint(new BezierPoint(currentPath.getLastControlPoint()), currentPath.getHeadingGoal(1));
         } else {
             breakFollowing();
         }
@@ -474,23 +571,19 @@ public class Follower {
         isBusy = true;
         followingPathChain = true;
         chainIndex++;
+        lastPathAdvanceTime = System.currentTimeMillis();
         setPath(currentPathChain.getPath(chainIndex));
         previousClosestPose = closestPose;
         if (followingPathChain) currentPathChain.update();
         closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
         updateErrorAndVectors();
         currentCallbacks = currentPathChain.getNextPathCallbacks(chainIndex);
-
-        for (PathCallback callback : currentCallbacks) {
-            callback.initialize();
-        }
+        for (PathCallback callback : currentCallbacks) callback.initialize();
     }
 
     public void updateCallbacks() {
         for (PathCallback callback : currentCallbacks) {
-            if (callback.isReady()) {
-                callback.run();
-            }
+            if (callback.isReady()) callback.run();
         }
     }
 
@@ -510,7 +603,7 @@ public class Follower {
     public PathPoint getClosestPose() { return closestPose; }
 
     public boolean atParametricEnd() {
-        if (currentPath == null){ return true; }
+        if (currentPath == null) return true;
         if (followingPathChain) {
             if (chainIndex == currentPathChain.size() - 1) return currentPath.isAtParametricEnd();
             return false;
@@ -553,18 +646,20 @@ public class Follower {
 
     @Deprecated
     public void turnToDegrees(double degrees) { turnTo(Math.toRadians(degrees)); }
-
     @Deprecated
     public void turnDegrees(double degrees, boolean isLeft) { turn(Math.toRadians(degrees), isLeft); }
 
     public boolean isTurning() { return isTurning; }
 
     public boolean atPose(Pose pose, double xTolerance, double yTolerance, double headingTolerance) {
-        return Math.abs(pose.getX() - getPose().getX()) < xTolerance && Math.abs(pose.getY() - getPose().getY()) < yTolerance && Math.abs(pose.getHeading() - getPose().getHeading()) < headingTolerance;
+        return Math.abs(pose.getX() - getPose().getX()) < xTolerance
+                && Math.abs(pose.getY() - getPose().getY()) < yTolerance
+                && Math.abs(pose.getHeading() - getPose().getHeading()) < headingTolerance;
     }
 
     public boolean atPose(Pose pose, double xTolerance, double yTolerance) {
-        return Math.abs(pose.getX() - getPose().getX()) < xTolerance && Math.abs(pose.getY() - getPose().getY()) < yTolerance;
+        return Math.abs(pose.getX() - getPose().getX()) < xTolerance
+                && Math.abs(pose.getY() - getPose().getY()) < yTolerance;
     }
 
     public void setMaxPowerScaling(double maxPowerScaling) { drivetrain.setMaxPowerScaling(maxPowerScaling); }
@@ -616,15 +711,15 @@ public class Follower {
     }
 
     public double getHeadingGoal(double t) {
-        if (currentPathChain != null) {
+        if (currentPathChain != null)
             return currentPathChain.getHeadingGoal(new PathChain.PathT(chainIndex, t));
-        }
         return currentPath.getHeadingGoal(t);
     }
 
     private double getHeadingGoal(PathPoint point) {
         if (currentPath == null) return 0;
-        if (currentPathChain != null) return currentPathChain.getHeadingGoal(new PathChain.PathT(chainIndex, point.tValue));
+        if (currentPathChain != null)
+            return currentPathChain.getHeadingGoal(new PathChain.PathT(chainIndex, point.tValue));
         return currentPath.getHeadingGoal(point);
     }
 
@@ -635,47 +730,27 @@ public class Follower {
         return currentPath.getHeadingGoal(closestPose);
     }
 
-    public Vector getClosestPointTangentVector() {
-        return getClosestPose().getTangentVector();
-    }
+    public Vector getClosestPointTangentVector() { return getClosestPose().getTangentVector(); }
 
-    public void activateAllPIDFs() {
-        useDrive = true;
-        useHeading = true;
-        useTranslational = true;
-        useCentripetal = true;
-    }
-
-    public void deactivateAllPIDFs() {
-        useDrive = false;
-        useHeading = false;
-        useTranslational = false;
-        useCentripetal = false;
-    }
-
+    public void activateAllPIDFs() { useDrive = true; useHeading = true; useTranslational = true; useCentripetal = true; }
+    public void deactivateAllPIDFs() { useDrive = false; useHeading = false; useTranslational = false; useCentripetal = false; }
     public void activateDrive() { useDrive = true; }
     public void activateHeading() { useHeading = true; }
     public void activateTranslational() { useTranslational = true; }
     public void activateCentripetal() { useCentripetal = true; }
 
     public double getDistanceTraveledOnPath() {
-        if (currentPath == null) {
-            return 0;
-        }
+        if (currentPath == null) return 0;
         return currentPath.getDistanceTraveled();
     }
 
     public double getPathCompletion() {
-        if (currentPath == null) {
-            return 0;
-        }
+        if (currentPath == null) return 0;
         return currentPath.getPathCompletion();
     }
 
     public double getDistanceRemaining() {
-        if (currentPath == null) {
-            return 0;
-        }
+        if (currentPath == null) return 0;
         return currentPath.getDistanceRemaining();
     }
 
@@ -696,10 +771,10 @@ public class Follower {
     public double getHeading() { return getPose().getHeading(); }
 
     public double getTotalDistanceRemaining() {
-        if (currentPath == null) { return 0; }
-        if (!followingPathChain) { return currentPath.getDistanceRemaining(); }
+        if (currentPath == null) return 0;
+        if (!followingPathChain) return currentPath.getDistanceRemaining();
         PathChain.DecelerationType type = currentPathChain.getDecelerationType();
-        if (type == PathChain.DecelerationType.NONE) { return -1; }
+        if (type == PathChain.DecelerationType.NONE) return -1;
         return currentPathChain.getDistanceRemaining(chainIndex);
     }
 }
