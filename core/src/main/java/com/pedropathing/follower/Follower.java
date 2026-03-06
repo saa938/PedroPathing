@@ -61,6 +61,7 @@ public class Follower {
     private Queue<PathCallback> currentCallbacks;
 
     // ── logging ──────────────────────────────────────────────────────────────
+    // Throttle: only print once every LOG_INTERVAL_MS so the logcat isn't flooded.
     private static final long LOG_INTERVAL_MS = 100;
     private long lastLogTime = 0;
 
@@ -68,6 +69,10 @@ public class Follower {
         System.out.println("[PEDRO/" + tag + "] " + msg);
     }
 
+    /**
+     * Throttled log — fires at most once per LOG_INTERVAL_MS.
+     * Use for values that change every loop (powers, errors, t-values).
+     */
     private void logThrottled(String tag, String msg) {
         long now = System.currentTimeMillis();
         if (now - lastLogTime >= LOG_INTERVAL_MS) {
@@ -262,13 +267,39 @@ public class Follower {
                 getClosestPointHeadingGoal(), usePredictiveBraking);
     }
 
+    /**
+     * For intermediate paths in a NONE-deceleration PathChain, Pedro's ErrorCalculator
+     * returns -1 (or a sentinel) as the drive error. VectorCalculator interprets this as
+     * "max power always", keeping getDriveVector() locked at 1.0 the entire path.
+     *
+     * This mirrors what Black Ice's FollowPathCommand does:
+     *   tangentPower = positionalController.computeOutput(distanceToEnd, vel.dot(tangent))
+     * — it passes the ACTUAL remaining arc-length directly into the PD controller so
+     * the output naturally drops below 1.0 as the robot approaches the waypoint.
+     *
+     * By substituting currentPath.getDistanceRemaining() as the drive error for
+     * intermediate NONE paths, Pedro's existing drive PIDF machinery decelerates
+     * naturally before each waypoint — no new tuning parameters needed.
+     */
+    private double getEffectiveDriveError() {
+        if (!useDrive || holdingPosition) return -1;
+        boolean isIntermediateNonePath = followingPathChain
+                && currentPathChain != null
+                && chainIndex < currentPathChain.size() - 1
+                && currentPathChain.getDecelerationType() == PathChain.DecelerationType.NONE;
+        if (isIntermediateNonePath) {
+            return currentPath != null ? currentPath.getDistanceRemaining() : getDriveError();
+        }
+        return getDriveError();
+    }
+
     public void updateVectors() {
         vectorCalculator.update(useDrive, useHeading, useTranslational, useCentripetal,
                 manualDrive, chainIndex,
                 drivetrain.getMaxPowerScaling(), followingPathChain,
                 centripetalScaling, currentPose, closestPose.getPose(),
                 poseTracker.getVelocity(), currentPath,
-                currentPathChain, useDrive && !holdingPosition ? getDriveError() : -1,
+                currentPathChain, getEffectiveDriveError(),
                 getTranslationalError(), getHeadingError(), getClosestPointHeadingGoal(),
                 getTotalDistanceRemaining(), usePredictiveBraking);
     }
@@ -282,7 +313,7 @@ public class Follower {
     /**
      * Black Ice's clampReversePower: if power is opposing the direction of motion,
      * cap it to ±0.2 to prevent brownouts and allow other axes budget.
-     * Applied in robot frame after allocation so the budget isn't consumed fighting momentum.
+     * Applied to normalPower before allocation so the budget isn't consumed fighting momentum.
      */
     private double clampReversePower(double power, double velocity) {
         if (velocity * power >= 0) return power; // same direction or zero — no clamp
@@ -335,46 +366,29 @@ public class Follower {
             updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
 
-            // ── path-local frame vectors ──────────────────────────────────────
             Vector tangent = currentPath.getClosestPointTangentVector().normalize();
             Vector normal  = currentPath.getClosestLeftGradientVector().normalize();
 
-            // Field-frame velocity component along each path axis.
             Vector fieldVelocity = poseTracker.getVelocity();
             double velocityDotNormal  = fieldVelocity.dot(normal);
             double velocityDotTangent = fieldVelocity.dot(tangent);
 
-            // ── Black Ice–style power allocation ─────────────────────────────
-            //
-            // KEY CHANGE vs previous implementation:
-            //   Previously, clampReversePower was applied to normalPower IN FIELD FRAME
-            //   BEFORE allocation. When normal correction opposed motion (e.g. entering a
-            //   90° corner), this clamped normalPower to ±0.2 before allocation, leaving
-            //   rem1 ≈ 0.980 — nearly the full budget for tangent. The robot then
-            //   accelerated at 97.5% tangent power while barely correcting, drifting 20"
-            //   off the path before recovery.
-            //
-            //   Black Ice instead applies clampReversePower AFTER allocation, component-wise
-            //   in ROBOT FRAME against robot-frame velocity. This means the full raw normal
-            //   power enters the allocation step and consumes its proper budget share,
-            //   leaving less for tangent. Only the final motor command is clamped to ±0.2
-            //   to protect against brownouts.
-            //
-            //   Concrete example at path 2 entry (vDotN=56.59, rawNorm=-0.800):
-            //     OLD: normalUsed=-0.200 → rem1=0.980 → tangentUsed=0.975 → drive=(-0.200,-0.975)
-            //     NEW: normalUsed=-0.800 → rem1=0.600 → tangentUsed=0.592 → robot clamp → drive=(-0.200,-0.592)
-            //   Robot now accelerates along path 2 at ~59% power instead of 97.5%,
-            //   giving the normal correction time to pull it back toward X=48.
             double rawNormalPower = getCorrectiveVector().dot(normal) * normalAuthority;
-            // No pre-allocation clamp — let the full value compete for budget
-            double normalUsed  = allocatePower(rawNormalPower, globalMaxPower);
-            double rem1 = Math.sqrt(Math.max(0.0, globalMaxPower * globalMaxPower - normalUsed * normalUsed));
-            double headingPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
-            double headingUsed = allocatePower(headingPower, rem1);
-            double rem2 = Math.sqrt(Math.max(0.0, rem1 * rem1 - headingUsed * headingUsed));
+            double normalPower    = clampReversePower(rawNormalPower, velocityDotNormal);
+
             double rawTangentPower = getDriveVector().dot(tangent);
             lastRawTangentPower = rawTangentPower;
+            boolean isIntermediatePath = followingPathChain && chainIndex < currentPathChain.size() - 1;
+
             double tangentPower = rawTangentPower;
+            double headingPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
+
+            // NORMAL, HEADING, TANGENT
+
+            double normalUsed  = allocatePower(normalPower, globalMaxPower);
+            double rem1 = Math.sqrt(Math.max(0.0, globalMaxPower * globalMaxPower - normalUsed * normalUsed));
+            double headingUsed = allocatePower(headingPower, rem1);
+            double rem2 = Math.sqrt(Math.max(0.0, rem1 * rem1 - headingUsed * headingUsed));
             double tangentUsed = allocatePower(tangentPower, rem2);
 
             if (reachedParametricPathEnd || currentPath.getClosestPointTValue() > 0.98) {
@@ -383,7 +397,6 @@ public class Follower {
 
             Vector fieldDrivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
 
-            // Rotate field→robot frame, negate Y (Pedro drivetrain convention).
             Vector robotDrivePower = fieldDrivePower.copy();
             robotDrivePower.rotateVector(-currentPose.getHeading());
             robotDrivePower.setOrthogonalComponents(
@@ -391,7 +404,6 @@ public class Follower {
                     -robotDrivePower.getYComponent()
             );
 
-            // Rotate velocity to robot frame the same way.
             Vector robotVelocity = poseTracker.getVelocity().copy();
             robotVelocity.rotateVector(-currentPose.getHeading());
             robotVelocity.setOrthogonalComponents(
@@ -399,23 +411,19 @@ public class Follower {
                     -robotVelocity.getYComponent()
             );
 
-            // ── Apply clampReversePower in robot frame, component-wise ────────
-            // Mirrors Black Ice's followFieldVector:
-            //   robotVector = toRobotRelative(fieldVector).map(toRobotRelative(velocity), clampReversePower)
-            // Any axis where the motor command opposes current motion is capped to ±0.2.
-            // Because clamping happens AFTER allocation, the budget consumed by the normal
-            // axis is correctly accounted for — tangent cannot "steal" budget that was
-            // legitimately needed for cross-track correction.
-            double clampedX = clampReversePower(robotDrivePower.getXComponent(), robotVelocity.getXComponent());
-            double clampedY = clampReversePower(robotDrivePower.getYComponent(), robotVelocity.getYComponent());
-            robotDrivePower.setOrthogonalComponents(clampedX, clampedY);
-
             // ── LOG A: main drive values (throttled) ──────────────────────────
+            // Shows the raw computed powers before and after allocation.
+            // If normalPower is huge but normalUsed is small → budget is starved by heading/tangent.
+            // If tangentPower > 0 but tangentUsed = 0 → deadband or reachedParametricPathEnd zeroing it.
+            // robotDrivePower X = forward/back in robot frame, Y = lateral.
             logThrottled("DRIVE",
                     "pos=[" + String.format("%.2f", currentPose.getX())
                             + "," + String.format("%.2f", currentPose.getY()) + "]"
                             + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
+                            + " distRem=" + String.format("%.1f", currentPath.getDistanceRemaining())
+                            + " effDriveErr=" + String.format("%.1f", getEffectiveDriveError())
                             + " rawNorm=" + String.format("%.3f", rawNormalPower)
+                            + " normPwr=" + String.format("%.3f", normalPower)
                             + " normUsed=" + String.format("%.3f", normalUsed)
                             + " vDotN=" + String.format("%.2f", velocityDotNormal)
                             + " rawTan=" + String.format("%.3f", rawTangentPower)
@@ -426,12 +434,16 @@ public class Follower {
                             + " rem2=" + String.format("%.3f", rem2)
                             + " drive=[" + String.format("%.3f", robotDrivePower.getXComponent())
                             + "," + String.format("%.3f", robotDrivePower.getYComponent()) + "]"
-                            + " isInter=" + (followingPathChain && chainIndex < currentPathChain.size() - 1)
+                            + " isInter=" + isIntermediatePath
             );
 
             drivetrain.followVector(robotDrivePower, headingUsed, robotVelocity);
         }
 
+        // ── LOG B: stuck-detection trigger ────────────────────────────────────
+        // Fires once when the timer starts. If you see this and then the robot still
+        // doesn't stop, the timeout (500 ms) is either expiring and doing the right
+        // thing, or the timer isn't being checked below.
         if (poseTracker.getVelocity().getMagnitude() < 1.0 && currentPath.getClosestPointTValue() > 0.8
                 && zeroVelocityDetectedTimer == null && isBusy) {
             zeroVelocityDetectedTimer = new Timer();
@@ -440,6 +452,11 @@ public class Follower {
                     + " vel=" + String.format("%.3f", poseTracker.getVelocity().getMagnitude()));
         }
 
+        // ── LOG C: path-skip inputs (throttled) ───────────────────────────────
+        // lastRawTangentPower: drive PIDF output projected on path tangent (correct value).
+        // When Pedro's predictive braking works this drops below globalMaxPower ~0.5-1s
+        // before path end. If it stays at exactly globalMaxPower → braking disabled for
+        // this path (DecelerationType.NONE), advance will happen at isAtParametricEnd.
         logThrottled("SKIP",
                 "chainIdx=" + chainIndex
                         + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
@@ -471,6 +488,10 @@ public class Follower {
         }
 
         if (followingPathChain && chainIndex < currentPathChain.size() - 1) {
+            // ── LOG D: path advance ───────────────────────────────────────────
+            // Fires exactly once per path transition.
+            // If you see this firing before the robot has visibly reached the path end
+            // → the skip condition is triggering too early (check LOG C tangentDot values).
             log("ADVANCE", "Advancing from path " + chainIndex + " → " + (chainIndex + 1)
                     + " reason: isAtEnd=" + currentPath.isAtParametricEnd()
                     + " nextWithin=" + nextPathWithinBrakingDistance
@@ -491,6 +512,11 @@ public class Follower {
             }
             reachedParametricPathEnd = true;
             reachedParametricPathEndTime = System.currentTimeMillis();
+            // ── LOG E: parametric end reached ────────────────────────────────
+            // Fires once when the robot is considered "at the end" of the last path.
+            // After this, tangentUsed is forced to 0 (see LOG A).
+            // If the robot is still moving sideways after this → normal correction is
+            // the culprit (normalPower non-zero and perpendicular to intended direction).
             log("END", "reachedParametricPathEnd=true"
                     + " pos=[" + String.format("%.2f", currentPose.getX())
                     + "," + String.format("%.2f", currentPose.getY()) + "]"
@@ -506,6 +532,14 @@ public class Follower {
                 poseTracker.getPose().getHeading(), getClosestPointHeadingGoal());
         long   msAtEnd   = System.currentTimeMillis() - reachedParametricPathEndTime;
 
+        // ── LOG F: end-constraint check (throttled) ───────────────────────────
+        // Shows every value checked to decide when the path is "done".
+        // velMag must be < getPathEndVelocityConstraint()
+        // transDist must be < getPathEndTranslationalConstraint()
+        // headingErr must be < getPathEndHeadingConstraint()
+        // OR msAtEnd > getPathEndTimeoutConstraint() to force-finish.
+        // If the robot is drifting and these never pass → normal correction is
+        // adding lateral velocity faster than the constraints allow it to expire.
         logThrottled("END-CHECK",
                 "msAtEnd=" + msAtEnd
                         + " timeout=" + currentPath.getPathEndTimeoutConstraint()
@@ -524,6 +558,10 @@ public class Follower {
 
         if (!timeoutDone && !constraintsDone) return;
 
+        // ── LOG G: path complete ──────────────────────────────────────────────
+        // Fires once when the path is declared done.
+        // "timeout" means it finished because time ran out (constraints weren't met).
+        // "constraints" means it settled cleanly.
         log("DONE", "Path complete. reason=" + (timeoutDone ? "timeout" : "constraints")
                 + " holdPositionAtEnd=" + holdPositionAtEnd);
 
@@ -570,7 +608,7 @@ public class Follower {
         isTurning = false;
         reachedParametricPathEnd = false;
         zeroVelocityDetectedTimer = null;
-        lastRawTangentPower = Double.MAX_VALUE;
+        lastRawTangentPower = Double.MAX_VALUE; // reset so stale value never triggers skip on new path
     }
 
     public boolean isBusy() { return isBusy; }
@@ -748,6 +786,7 @@ public class Follower {
         if (currentPath == null) return 0;
         if (!followingPathChain) return currentPath.getDistanceRemaining();
         PathChain.DecelerationType type = currentPathChain.getDecelerationType();
+
         if (type == PathChain.DecelerationType.NONE) return currentPath.getDistanceRemaining();
         return currentPathChain.getDistanceRemaining(chainIndex);
     }
