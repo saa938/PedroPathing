@@ -373,8 +373,7 @@ public class Follower {
             double velocityDotNormal  = fieldVelocity.dot(normal);
             double velocityDotTangent = fieldVelocity.dot(tangent);
 
-            double rawNormalPower = getCorrectiveVector().dot(normal) * normalAuthority;
-            double normalPower    = clampReversePower(rawNormalPower, velocityDotNormal);
+            double normalPower = getCorrectiveVector().dot(normal) * normalAuthority;
 
             double rawTangentPower = getDriveVector().dot(tangent);
             lastRawTangentPower = rawTangentPower;
@@ -422,7 +421,6 @@ public class Follower {
                             + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
                             + " distRem=" + String.format("%.1f", currentPath.getDistanceRemaining())
                             + " effDriveErr=" + String.format("%.1f", getEffectiveDriveError())
-                            + " rawNorm=" + String.format("%.3f", rawNormalPower)
                             + " normPwr=" + String.format("%.3f", normalPower)
                             + " normUsed=" + String.format("%.3f", normalUsed)
                             + " vDotN=" + String.format("%.2f", velocityDotNormal)
