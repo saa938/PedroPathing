@@ -62,7 +62,7 @@ public class Follower {
 
     // ── logging ──────────────────────────────────────────────────────────────
     // Throttle: only print once every LOG_INTERVAL_MS so the logcat isn't flooded.
-    private static final long LOG_INTERVAL_MS = 100;
+    private static final long LOG_INTERVAL_MS = 30;
     private long lastLogTime = 0;
 
     private void log(String tag, String msg) {
