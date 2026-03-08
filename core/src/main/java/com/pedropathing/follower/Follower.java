@@ -362,39 +362,85 @@ public class Follower {
         if (isBusy) {
             previousClosestPose = closestPose;
             if (followingPathChain) currentPathChain.update();
-            closestPose = currentPath.updateClosestPose(poseTracker.getPose(), BEZIER_CURVE_SEARCH_LIMIT);
-            updateErrorAndVectors();
+            closestPose = currentPath.updateClosestPose(poseTracker.getPose(),
+                    BEZIER_CURVE_SEARCH_LIMIT);
+//            updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
 
-            Vector tangent = currentPath.getClosestPointTangentVector().normalize();
-            Vector normal  = currentPath.getClosestLeftGradientVector().normalize();
+            Vector translationalError =
+                    closestPose.getPose().getAsVector().minus(currentPose.getAsVector());
 
-            Vector fieldVelocity = poseTracker.getVelocity();
-            double velocityDotNormal  = fieldVelocity.dot(normal);
-            double velocityDotTangent = fieldVelocity.dot(tangent);
+            double headingError = MathFunctions.getTurnDirection(currentPose.getHeading(), getClosestPointHeadingGoal())
+                    * MathFunctions.getSmallestAngleDifference(currentPose.getHeading(), getClosestPointHeadingGoal());
+            double headingPower =
+                    vectorCalculator.getHeadingVector(headingError, currentPose,
+                            getHeadingGoal(closestPose)).dot(new Vector(1.0,
+                            currentPose.getHeading()));
 
-            double normalPower = getCorrectiveVector().dot(normal) * normalAuthority;
+            Vector fieldDrivePower;
 
-            double rawTangentPower = getDriveVector().dot(tangent);
-            lastRawTangentPower = rawTangentPower;
-            boolean isIntermediatePath = followingPathChain && chainIndex < currentPathChain.size() - 1;
+            if (currentPath.isAtParametricEnd()) { // at end of path/holding
+                fieldDrivePower = new Vector(
+                        vectorCalculator.predictiveBrakingController.computeOutput(
+                                translationalError.getXComponent(),
+                                getVelocity().getXComponent()),
+                        vectorCalculator.predictiveBrakingController.computeOutput(
+                                translationalError.getYComponent(),
+                                getVelocity().getYComponent())
+                );
+            } else { // along the path
+                Vector tangent = currentPath.getClosestPointTangentVector().normalize();
+                Vector normal = currentPath.getClosestLeftGradientVector().normalize();
 
-            double tangentPower = rawTangentPower;
-            double headingPower = getHeadingVector().dot(new Vector(1.0, currentPose.getHeading()));
+                Vector fieldVelocity = poseTracker.getVelocity();
+                double velocityDotNormal = fieldVelocity.dot(normal);
+                double velocityDotTangent = fieldVelocity.dot(tangent);
 
-            // NORMAL, HEADING, TANGENT
+                double normalPower = normalAuthority *
+                        vectorCalculator.predictiveBrakingController.computeOutput(
+                                translationalError.dot(normal),
+                                velocityDotNormal);
 
-            double normalUsed  = allocatePower(normalPower, globalMaxPower);
-            double rem1 = Math.sqrt(Math.max(0.0, globalMaxPower * globalMaxPower - normalUsed * normalUsed));
-            double headingUsed = allocatePower(headingPower, rem1);
-            double rem2 = Math.sqrt(Math.max(0.0, rem1 * rem1 - headingUsed * headingUsed));
-            double tangentUsed = allocatePower(tangentPower, rem2);
+                double tangentPower =
+                        vectorCalculator.predictiveBrakingController.computeOutput(
+                                getTotalDistanceRemaining(), velocityDotTangent);
 
-            if (reachedParametricPathEnd || currentPath.getClosestPointTValue() > 0.98) {
-                tangentUsed = 0.0;
+                lastRawTangentPower = tangentPower;
+
+                // NORMAL, HEADING, TANGENT
+                double normalUsed = allocatePower(normalPower, globalMaxPower);
+                double rem1 = Math.sqrt(
+                        Math.max(0.0, globalMaxPower * globalMaxPower - normalUsed * normalUsed));
+                headingPower = allocatePower(headingPower, rem1);
+                double rem2 =
+                        Math.sqrt(Math.max(0.0, rem1 * rem1 - headingPower * headingPower));
+                double tangentUsed = allocatePower(tangentPower, rem2);
+
+                fieldDrivePower =
+                        normal.times(normalUsed).plus(tangent.times(tangentUsed));
+
+                boolean isIntermediatePath =
+                        followingPathChain && chainIndex < currentPathChain.size() - 1;
+
+                logThrottled("DRIVE",
+                        "pos=[" + String.format("%.2f", currentPose.getX())
+                                + "," + String.format("%.2f", currentPose.getY()) + "]"
+                                + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
+                                + " distRem=" + String.format("%.1f", currentPath.getDistanceRemaining())
+                                + " effDriveErr=" + String.format("%.1f", getEffectiveDriveError())
+                                + " normPwr=" + String.format("%.3f", normalPower)
+                                + " normUsed=" + String.format("%.3f", normalUsed)
+                                + " vDotN=" + String.format("%.2f", velocityDotNormal)
+                                + " rawTan=" + String.format("%.3f", tangentPower)
+                                + " tanUsed=" + String.format("%.3f", tangentUsed)
+                                + " vDotT=" + String.format("%.2f", velocityDotTangent)
+                                + " hdgPwr=" + String.format("%.3f", headingPower)
+                                + " rem1=" + String.format("%.3f", rem1)
+                                + " rem2=" + String.format("%.3f", rem2)
+                                + " drive=[" + String.format("%.3f", fieldDrivePower.getXComponent())
+                                + "," + String.format("%.3f", fieldDrivePower.getYComponent()) + "]"
+                                + " isInter=" + isIntermediatePath);
             }
-
-            Vector fieldDrivePower = normal.times(normalUsed).plus(tangent.times(tangentUsed));
 
             Vector robotDrivePower = fieldDrivePower.copy();
             robotDrivePower.rotateVector(-currentPose.getHeading());
@@ -410,32 +456,7 @@ public class Follower {
                     -robotVelocity.getYComponent()
             );
 
-            // ── LOG A: main drive values (throttled) ──────────────────────────
-            // Shows the raw computed powers before and after allocation.
-            // If normalPower is huge but normalUsed is small → budget is starved by heading/tangent.
-            // If tangentPower > 0 but tangentUsed = 0 → deadband or reachedParametricPathEnd zeroing it.
-            // robotDrivePower X = forward/back in robot frame, Y = lateral.
-            logThrottled("DRIVE",
-                    "pos=[" + String.format("%.2f", currentPose.getX())
-                            + "," + String.format("%.2f", currentPose.getY()) + "]"
-                            + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
-                            + " distRem=" + String.format("%.1f", currentPath.getDistanceRemaining())
-                            + " effDriveErr=" + String.format("%.1f", getEffectiveDriveError())
-                            + " normPwr=" + String.format("%.3f", normalPower)
-                            + " normUsed=" + String.format("%.3f", normalUsed)
-                            + " vDotN=" + String.format("%.2f", velocityDotNormal)
-                            + " rawTan=" + String.format("%.3f", rawTangentPower)
-                            + " tanUsed=" + String.format("%.3f", tangentUsed)
-                            + " vDotT=" + String.format("%.2f", velocityDotTangent)
-                            + " hdgUsed=" + String.format("%.3f", headingUsed)
-                            + " rem1=" + String.format("%.3f", rem1)
-                            + " rem2=" + String.format("%.3f", rem2)
-                            + " drive=[" + String.format("%.3f", robotDrivePower.getXComponent())
-                            + "," + String.format("%.3f", robotDrivePower.getYComponent()) + "]"
-                            + " isInter=" + isIntermediatePath
-            );
-
-            drivetrain.followVector(robotDrivePower, headingUsed, robotVelocity);
+            drivetrain.followVector(robotDrivePower, headingPower, robotVelocity);
         }
 
         // ── LOG B: stuck-detection trigger ────────────────────────────────────
