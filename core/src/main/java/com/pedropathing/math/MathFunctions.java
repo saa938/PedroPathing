@@ -194,4 +194,8 @@ public class MathFunctions {
         
         return newMatrix;
     }
+
+    public static double wrapAngle(double angle) {
+        return Math.atan2(Math.sin(angle), Math.cos(angle));
+    }
 }

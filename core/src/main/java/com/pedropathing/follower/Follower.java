@@ -50,7 +50,7 @@ public class Follower {
     // Saved each loop inside isBusy so the skip block uses the same value — not a
     // fresh getDriveVector() call which can return inconsistent results outside isBusy.
     private double lastRawTangentPower = Double.MAX_VALUE;
-    public double normalAuthority = 0.8; // Tune: lower → more braking budget, higher → tighter path tracking
+    public double normalAuthority = 1.0; // Tune: lower → more braking budget, higher → tighter path tracking
     public boolean useTranslational = true;
     public boolean useCentripetal = true;
     public boolean useHeading = true;
@@ -364,18 +364,42 @@ public class Follower {
             if (followingPathChain) currentPathChain.update();
             closestPose = currentPath.updateClosestPose(poseTracker.getPose(),
                     BEZIER_CURVE_SEARCH_LIMIT);
-//            updateErrorAndVectors();
+            //updateErrorAndVectors();
             if (followingPathChain) updateCallbacks();
+
+            Vector tangent = currentPath.getClosestPointTangentVector().normalize();
+            Vector fieldVelocity = poseTracker.getVelocity();
+            double velocityDotTangent = fieldVelocity.dot(tangent);
+            double tangentPower =
+                    vectorCalculator.predictiveBrakingController.computeOutput(
+                            getDistanceRemaining(), velocityDotTangent);
+
+            boolean nextPathWithinBrakingDistance =
+                    followingPathChain
+                            && chainIndex < currentPathChain.size() - 1
+                            && usePredictiveBraking
+                            && tangentPower < 0;
+
+            if (nextPathWithinBrakingDistance) {
+                advanceToNextPath();
+                if (!currentPath.isAtParametricEnd()) {
+                    tangent = currentPath.getClosestPointTangentVector().normalize();
+                    fieldVelocity = poseTracker.getVelocity();
+                    velocityDotTangent = fieldVelocity.dot(tangent);
+                    tangentPower =
+                            vectorCalculator.predictiveBrakingController.computeOutput(
+                                    getDistanceRemaining(), velocityDotTangent);
+                }
+            }
 
             Vector translationalError =
                     closestPose.getPose().getAsVector().minus(currentPose.getAsVector());
 
-            double headingError = MathFunctions.getTurnDirection(currentPose.getHeading(), getClosestPointHeadingGoal())
-                    * MathFunctions.getSmallestAngleDifference(currentPose.getHeading(), getClosestPointHeadingGoal());
+            double headingGoal = getClosestPointHeadingGoal();
+            double headingError =
+                    MathFunctions.wrapAngle(headingGoal - currentPose.getHeading());
             double headingPower =
-                    vectorCalculator.getHeadingVector(headingError, currentPose,
-                            getHeadingGoal(closestPose)).dot(new Vector(1.0,
-                            currentPose.getHeading()));
+                    vectorCalculator.getHeadingVector(headingError, currentPose, headingGoal).dot(new Vector(1.0, currentPose.getHeading()));
 
             Vector fieldDrivePower;
 
@@ -389,21 +413,14 @@ public class Follower {
                                 getVelocity().getYComponent())
                 );
             } else { // along the path
-                Vector tangent = currentPath.getClosestPointTangentVector().normalize();
                 Vector normal = currentPath.getClosestLeftGradientVector().normalize();
 
-                Vector fieldVelocity = poseTracker.getVelocity();
                 double velocityDotNormal = fieldVelocity.dot(normal);
-                double velocityDotTangent = fieldVelocity.dot(tangent);
 
                 double normalPower = normalAuthority *
                         vectorCalculator.predictiveBrakingController.computeOutput(
                                 translationalError.dot(normal),
                                 velocityDotNormal);
-
-                double tangentPower =
-                        vectorCalculator.predictiveBrakingController.computeOutput(
-                                getTotalDistanceRemaining(), velocityDotTangent);
 
                 lastRawTangentPower = tangentPower;
 
@@ -433,7 +450,7 @@ public class Follower {
                                 + " vDotN=" + String.format("%.2f", velocityDotNormal)
                                 + " rawTan=" + String.format("%.3f", tangentPower)
                                 + " tanUsed=" + String.format("%.3f", tangentUsed)
-                                + " vDotT=" + String.format("%.2f", velocityDotTangent)
+//                                + " vDotT=" + String.format("%.2f", velocityDotTangent)
                                 + " hdgPwr=" + String.format("%.3f", headingPower)
                                 + " rem1=" + String.format("%.3f", rem1)
                                 + " rem2=" + String.format("%.3f", rem2)
@@ -487,9 +504,6 @@ public class Follower {
                         && usePredictiveBraking
                         && currentPath.getClosestPointTValue() > 0.5
                         && lastRawTangentPower < globalMaxPower)
-                        + " stuckTimer=" + (zeroVelocityDetectedTimer != null
-                        ? String.format("%.0f ms", zeroVelocityDetectedTimer.getElapsedTime())
-                        : "null")
         );
 
         boolean nextPathWithinBrakingDistance =
@@ -497,10 +511,10 @@ public class Follower {
                         && chainIndex < currentPathChain.size() - 1
                         && usePredictiveBraking
                         && currentPath.getClosestPointTValue() > 0.5
-                        && lastRawTangentPower < globalMaxPower;
+                        && lastRawTangentPower < 0;
 
         if (!(currentPath.isAtParametricEnd()
-                || nextPathWithinBrakingDistance
+             //   || nextPathWithinBrakingDistance
                 || (zeroVelocityDetectedTimer != null
                 && zeroVelocityDetectedTimer.getElapsedTime() > 500.0))) {
             return;
@@ -513,7 +527,7 @@ public class Follower {
             // → the skip condition is triggering too early (check LOG C tangentDot values).
             log("ADVANCE", "Advancing from path " + chainIndex + " → " + (chainIndex + 1)
                     + " reason: isAtEnd=" + currentPath.isAtParametricEnd()
-                    + " nextWithin=" + nextPathWithinBrakingDistance
+//                    + " nextWithin=" + nextPathWithinBrakingDistance
                     + " stuck=" + (zeroVelocityDetectedTimer != null
                     && zeroVelocityDetectedTimer.getElapsedTime() > 500.0)
                     + " t=" + String.format("%.3f", currentPath.getClosestPointTValue())
