@@ -416,13 +416,19 @@ public class Follower {
                 Vector normal = currentPath.getClosestLeftGradientVector().normalize();
 
                 double velocityDotNormal = fieldVelocity.dot(normal);
+                double normalError = translationalError.dot(normal);
 
                 double normalPower = normalAuthority *
                         vectorCalculator.predictiveBrakingController.computeOutput(
-                                translationalError.dot(normal),
+                                normalError,
                                 velocityDotNormal);
 
-                lastRawTangentPower = tangentPower;
+                // cos trick
+                double cosNormal  = Math.cos(Math.min(Math.abs(normalError)  * 0.1, Math.PI / 2)); // play around with 0.1
+                double cosHeading = Math.cos(Math.min(Math.abs(headingError) * 0.1, Math.PI / 2)); // play around with 0.1 as well
+                double scaledTangentPower = tangentPower * cosNormal * cosHeading;
+
+                lastRawTangentPower = scaledTangentPower;
 
                 // NORMAL, HEADING, TANGENT
                 double normalUsed = allocatePower(normalPower, globalMaxPower);
@@ -431,7 +437,7 @@ public class Follower {
                 headingPower = allocatePower(headingPower, rem1);
                 double rem2 =
                         Math.sqrt(Math.max(0.0, rem1 * rem1 - headingPower * headingPower));
-                double tangentUsed = allocatePower(tangentPower, rem2);
+                double tangentUsed = allocatePower(scaledTangentPower, rem2);
 
                 fieldDrivePower =
                         normal.times(normalUsed).plus(tangent.times(tangentUsed));
