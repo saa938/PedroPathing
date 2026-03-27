@@ -16,15 +16,15 @@ package com.pedropathing.control;
  */
 public class PredictiveBrakingController {
     private PredictiveBrakingCoefficients coefficients;
-    
+
     public PredictiveBrakingController(PredictiveBrakingCoefficients coefficients) {
         this.coefficients = coefficients;
     }
-    
+
     public void setCoefficients(PredictiveBrakingCoefficients coefficients) {
         this.coefficients = coefficients;
     }
-    
+
     /**
      * Computes the control output.
      * <p>
@@ -40,18 +40,18 @@ public class PredictiveBrakingController {
      */
     public double computeOutput(double error, double velocity) {
         double directionOfMotion = Math.signum(velocity);
-        
+
         double outputPower =
-            coefficients.P * (error - computeBrakingDisplacement(velocity, directionOfMotion));
-        
+                coefficients.P * (error - computeBrakingDisplacement(velocity, directionOfMotion));
+
         return outputPower;
     }
-    
+
     public double computeBrakingDisplacement(double velocity, double directionOfMotion) {
         return directionOfMotion * velocity * velocity * coefficients.kQuadraticFriction
                 + velocity * coefficients.kLinearBraking;
     }
-    
+
     /**
      * Prevents the controller from applying too much power in the opposite direction of
      * the robot's momentum. Alternating full forward (+1) and full reverse (-1) power

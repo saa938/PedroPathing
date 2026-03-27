@@ -2,7 +2,8 @@ package com.pedropathing.ftc.drivetrains;
 
 import static com.pedropathing.math.MathFunctions.findNormalizingScaling;
 
-import com.pedropathing.drivetrain.Drivetrain;
+import com.pedropathing.control.PredictiveBrakingCoefficients;
+import com.pedropathing.drivetrain.CustomDrivetrain;
 import com.pedropathing.math.Vector;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -22,7 +23,7 @@ import java.util.List;
  * @author Harrison Womack - 10158 Scott's Bots
  * @version 1.0, 4/30/2025
  */
-public class Mecanum extends Drivetrain {
+public class Mecanum extends CustomDrivetrain {
     public MecanumConstants constants;
     private final DcMotorEx leftFront;
     private final DcMotorEx leftRear;
@@ -42,12 +43,13 @@ public class Mecanum extends Drivetrain {
      * @param hardwareMap      this is the HardwareMap object that contains the motors and other hardware
      * @param mecanumConstants this is the MecanumConstants object that contains the names of the motors and directions etc.
      */
-    public Mecanum(HardwareMap hardwareMap, MecanumConstants mecanumConstants) {
+    public Mecanum(HardwareMap hardwareMap, MecanumConstants mecanumConstants, PredictiveBrakingCoefficients predictiveBrakingCoefficients) {
         constants = mecanumConstants;
 
         this.maxPowerScaling = mecanumConstants.maxPower;
         this.motorCachingThreshold = mecanumConstants.motorCachingThreshold;
         this.useBrakeModeInTeleOp = mecanumConstants.useBrakeModeInTeleOp;
+        this.maximumBrakingPower = predictiveBrakingCoefficients.getMaximumBrakingPower();
 
         voltageSensor = hardwareMap.voltageSensor.iterator().next();
 
@@ -73,6 +75,29 @@ public class Mecanum extends Drivetrain {
                 new Vector(copiedFrontLeftVector.getMagnitude(), 2 * Math.PI - copiedFrontLeftVector.getTheta()),
                 new Vector(copiedFrontLeftVector.getMagnitude(), 2 * Math.PI - copiedFrontLeftVector.getTheta()),
                 new Vector(copiedFrontLeftVector.getMagnitude(), copiedFrontLeftVector.getTheta())};
+    }
+
+    public void arcadeDrive(double forward, double strafe, double rotation) {
+        double[] wheelPowers = new double[4];
+
+        wheelPowers[0] = forward + strafe - rotation; //leftFront
+        wheelPowers[1] = forward - strafe + rotation; //rightFront
+        wheelPowers[2] = forward - strafe - rotation; //leftRear
+        wheelPowers[3] = forward + strafe + rotation; //rightRear
+
+        double denom = 1;
+        for (double power : wheelPowers) {
+            denom = Math.max(denom, Math.abs(power));
+        }
+
+        for (int i = 0; i < 4; i++) {
+            wheelPowers[i] = wheelPowers[i] / denom;
+        }
+
+        leftFront.setPower(wheelPowers[0]);
+        rightFront.setPower(wheelPowers[1]);
+        leftRear.setPower(wheelPowers[2]);
+        rightRear.setPower(wheelPowers[3]);
     }
 
     @Override
@@ -189,6 +214,62 @@ public class Mecanum extends Drivetrain {
         }
 
         return wheelPowers;
+    }
+
+    /**
+     * Follows a robot-relative vector with heading correction and per-axis reverse-power clamping.
+     *
+     * The robotVector arrives already in the robot frame (rotated by -heading in Follower).
+     * Pedro's convention after that rotation is:
+     *   X component = forward / backward direction
+     *   Y component = lateral (left / right) direction
+     *
+     * For mecanum, forward/backward and lateral map to completely separate wheel pairs:
+     *   Forward/back:  all four wheels spin the same direction
+     *   Lateral:       diagonal pairs (FL+RR vs FR+RL) spin opposite directions
+     * Therefore the reverse-power clamp must operate on forward and lateral independently.
+     * Clamping along path-tangent / path-normal directions instead would spread braking
+     * power across both axes in proportions that don't match the mecanum geometry, causing
+     * some wheels to brake while others accelerate on the same maneuver.
+     *
+     * There is no need for a xVelocity/yVelocity ratio adjustment here — arcadeDrive already
+     * handles the mecanum mixing math correctly from forward/strafe scalars.
+     *
+     * @param robotVector    robot-relative drive vector (X = forward, Y = lateral)
+     * @param turnPower      signed turn scalar (+CCW, -CW)
+     * @param robotVelocity  robot-relative velocity vector for per-axis reverse-power clamping
+     */
+    @Override
+    public void followVector(Vector robotVector, double turnPower, Vector robotVelocity) {
+        // Pedro robot frame after rotateVector(-heading): X = forward, Y = lateral.
+        double forward = clampReversePower(robotVector.getXComponent(), robotVelocity.getXComponent());
+        double strafe  = clampReversePower(robotVector.getYComponent(), robotVelocity.getYComponent());
+        arcadeDrive(forward, strafe, turnPower);
+    }
+
+    /**
+     * Prevents the robot from applying too much power in the opposite direction of
+     * the robot's momentum. Alternating full forward (+1) and full reverse (-1) power
+     * causes the control hub to restart due to low voltage spikes. This prevents that by
+     * capping the amount of voltage applied opposite to the direction of motion to be
+     * very minimal. Even a tiny opposite voltage (e.g., -0.0001) locks the wheels like
+     * zero-power brake mode, using the motor's own momentum for braking without consuming
+     * significant energy.
+     */
+    public double clampReversePower(double power, double directionOfMotion) {
+        if (Math.abs(directionOfMotion) < 5.0) {
+            return power;
+        }
+
+        boolean isOpposingMotion = directionOfMotion * power < 0;
+        if (!isOpposingMotion) {
+            return power;
+        }
+        if (power < 0) {
+            return Math.max(power, -maximumBrakingPower);
+        } else {
+            return Math.min(power, maximumBrakingPower);
+        }
     }
 
     /**

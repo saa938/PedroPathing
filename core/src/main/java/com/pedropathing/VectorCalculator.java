@@ -45,8 +45,8 @@ public class VectorCalculator {
     private double[] teleopDriveValues;
 
     private boolean useDrive = true, useHeading = true, useTranslational = true,
-        useCentripetal = true, teleopDrive = false, followingPathChain = false,
-        usePredictiveBraking = true;
+            useCentripetal = true, teleopDrive = false, followingPathChain = false,
+            usePredictiveBraking = true;
     private double maxPowerScaling = 1.0, mass = 10.65;
     private boolean scaleDriveFeedforward;
     private double distanceRemainingBeforeStop;
@@ -62,7 +62,7 @@ public class VectorCalculator {
 
     private PIDFController headingPIDF;
     private FilteredPIDFController secondaryDrivePIDF, drivePIDF;
-    
+
     public PredictiveBrakingController predictiveBrakingController;
 
     public VectorCalculator(FollowerConstants constants) {
@@ -78,7 +78,7 @@ public class VectorCalculator {
         predictiveBrakingController = new PredictiveBrakingController(constants.predictiveBrakingCoefficients);
         updateConstants();
     }
-    
+
     public void updateConstants() {
         drivePIDF.setCoefficients(constants.coefficientsDrivePIDF);
         secondaryDrivePIDF.setCoefficients(constants.coefficientsSecondaryDrivePIDF);
@@ -133,7 +133,7 @@ public class VectorCalculator {
         if(teleopDrive)
             teleopUpdate();
     }
-    
+
     public void breakFollowing() {
         secondaryDrivePIDF.reset();
         drivePIDF.reset();
@@ -143,7 +143,7 @@ public class VectorCalculator {
         secondaryTranslationalIntegral.reset();
         translationalPIDF.reset();
         translationalIntegral.reset();
-        
+
         secondaryTranslationalIntegralVector = new Vector();
         translationalIntegralVector = new Vector();
         driveVector = new Vector();
@@ -192,14 +192,14 @@ public class VectorCalculator {
         if (followingPathChain && ((chainIndex < currentPathChain.size() - 1 && currentPathChain.getDecelerationType() == PathChain.DecelerationType.LAST_PATH) || currentPathChain.getDecelerationType() == PathChain.DecelerationType.NONE)) {
             return new Vector(maxPowerScaling, currentPath.getClosestPointTangentVector().getTheta());
         }
-        
+
         if (usePredictiveBraking) {
             if (distanceRemainingBeforeStop == -1) {
                 return new Vector(maxPowerScaling, currentPath.getClosestPointTangentVector().getTheta());
             }
             return new Vector(
-                predictiveBrakingController.computeOutput(distanceRemainingBeforeStop,
-                                                          velocity.dot(currentPath.getClosestPointTangentVector().normalize())), currentPath.getClosestPointTangentVector().getTheta());
+                    predictiveBrakingController.computeOutput(distanceRemainingBeforeStop,
+                            velocity.dot(currentPath.getClosestPointTangentVector().normalize())), currentPath.getClosestPointTangentVector().getTheta());
         }
 
         if (driveError == -1) return new Vector(maxPowerScaling, currentPath.getClosestPointTangentVector().getTheta());
@@ -296,17 +296,17 @@ public class VectorCalculator {
         if (usePredictiveBraking) {
             if (currentPath.isAtParametricEnd()) {
                 return new Vector(
-                    predictiveBrakingController.computeOutput(translationalError.getXComponent(),
-                                                              velocity.getXComponent()),
-                    predictiveBrakingController.computeOutput(translationalError.getYComponent(),
-                                                              velocity.getYComponent())
+                        predictiveBrakingController.computeOutput(translationalError.getXComponent(),
+                                velocity.getXComponent()),
+                        predictiveBrakingController.computeOutput(translationalError.getYComponent(),
+                                velocity.getYComponent())
                 );
             }
 
             Vector normal = currentPath.getClosestLeftGradientVector();
             return normal.times(
                     predictiveBrakingController.computeOutput(translationalError.dot(normal),
-                                                              velocity.dot(normal)));
+                            velocity.dot(normal)));
         }
 
         if (!(currentPath.isAtParametricEnd() || currentPath.isAtParametricStart())) {

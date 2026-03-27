@@ -9,6 +9,7 @@ import com.pedropathing.math.Vector;
  * It is intended to be used as a base class for custom drivetrain implementations.
  *
  * @author Havish Sripada - 12808 RevAmped Robotics
+ * @author Kabir Goyal
  */
 public abstract class CustomDrivetrain extends Drivetrain {
     protected Vector lastTranslationalVector = new Vector();
@@ -16,17 +17,55 @@ public abstract class CustomDrivetrain extends Drivetrain {
     protected Vector lastCorrectivePower = new Vector();
     protected Vector lastPathingPower = new Vector();
     protected double lastHeading = 0;
+    protected double maximumBrakingPower = 0.2; // Default clamping threshold
 
     /**
-     * This method takes in forward, strafe, and rotation values and applies them to the drivetrain.
-     * Intended to work exactly like an arcade drive would in a typical TeleOp, this method can be a copy pasted from
-     * a robot-centric arcade drive implementation.
+     * This method takes in forward, strafe, and rotation values and applies them to
+     * the drivetrain.
      *
-     * @param forward the forward power value, which would typically be -gamepad1.left_stick_y in a normal arcade drive setup.
-     * @param strafe the strafe power value, which would typically be -gamepad1.left_stick_x in a normal arcade drive setup.
-     * @param rotation the rotation power value, which would typically be -gamepad1.right_stick_x in a normal arcade drive setup.
+     * @param forward the forward power value, which would typically be
+     *                -gamepad1.left_stick_y in a normal arcade drive setup
+     * @param strafe the strafe power value, which would typically be
+     *               -gamepad1.left_stick_x in a normal arcade drive setup
+     *               because pedro treats left as positive
+     * @param rotation the rotation power value, which would typically be
+     *                 -gamepad1.right_stick_x in a normal arcade drive setup
+     *                 because CCW is positive
      */
     public abstract void arcadeDrive(double forward, double strafe, double rotation);
+
+    /**
+     * Sets the maximum braking power threshold (default 0.2)
+     * @param threshold the maximum power allowed when opposing velocity direction
+     */
+    public void setMaximumBrakingPower(double threshold) {
+        this.maximumBrakingPower = Math.max(0, Math.min(1, threshold));
+    }
+
+    /**
+     * Prevents the robot from applying too much power in the opposite direction of
+     * the robot's momentum. Alternating full forward (+1) and full reverse (-1) power
+     * causes the control hub to restart due to low voltage spikes. This prevents that by
+     * capping the amount of voltage applied opposite to the direction of motion to be
+     * very minimal. Even a tiny opposite voltage (e.g., -0.0001) locks the wheels like
+     * zero-power brake mode, using the motor's own momentum for braking without consuming
+     * significant energy.
+     *
+     * @param power the requested power
+     * @param directionOfMotion the current velocity in that direction
+     * @return the clamped power
+     */
+    protected double clampReversePower(double power, double directionOfMotion) {
+        boolean isOpposingMotion = directionOfMotion * power < 0;
+        if (!isOpposingMotion) {
+            return power;
+        }
+        if (power < 0) {
+            return Math.max(power, -maximumBrakingPower);
+        } else {
+            return Math.min(power, maximumBrakingPower);
+        }
+    }
 
     @Override
     public double[] calculateDrive(Vector correctivePower, Vector headingPower, Vector pathingPower, double robotHeading) {
@@ -73,7 +112,6 @@ public abstract class CustomDrivetrain extends Drivetrain {
         }
     }
 
-
     protected boolean scaleDown(Vector staticVector, Vector variableVector, boolean useMinus) {
         return (staticVector.plus(variableVector).getMagnitude() >= maxPowerScaling) ||
                 (useMinus && staticVector.minus(variableVector).getMagnitude() >= maxPowerScaling);
@@ -98,8 +136,36 @@ public abstract class CustomDrivetrain extends Drivetrain {
         lastHeadingPower = headingPower;
         lastHeading = robotHeading;
 
-        translationalVector.rotateVector(-robotHeading); // this should make it field centric when field centric is desired and robot centric otherwise
+        translationalVector.rotateVector(-robotHeading); // field → robot frame
         arcadeDrive(translationalVector.getXComponent(), translationalVector.getYComponent(), calculatedDrive[2]);
+    }
+
+    /**
+     * Follows a robot-relative vector with heading correction and per-axis reverse-power clamping.
+     *
+     * The robotVector arrives already in the robot frame (rotated by -heading in Follower).
+     * Pedro's convention after that rotation is:
+     *   X component = forward / backward direction
+     *   Y component = lateral (left / right) direction
+     * This matches exactly what runDrive produces before calling arcadeDrive(x, y, rot).
+     *
+     * We clamp forward against the forward velocity component and lateral against the lateral
+     * velocity component independently. Clamping along path-tangent / path-normal directions
+     * instead would spread the braking across both axes in ways that don't map cleanly to
+     * mecanum wheel pairs, causing some wheels to brake while others accelerate along the same
+     * maneuver.
+     *
+     * @param robotVector    robot-relative drive vector (X = forward, Y = lateral)
+     * @param turnPower      signed turn scalar (+CCW, -CW)
+     * @param robotVelocity  robot-relative velocity vector for per-axis reverse-power clamping
+     */
+    @Override
+    public void followVector(Vector robotVector, double turnPower, Vector robotVelocity) {
+        // Pedro robot frame after rotateVector(-heading): X = forward, Y = lateral.
+        // Clamp each axis independently — forward braking should not bleed into lateral and vice versa.
+        double forward = clampReversePower(robotVector.getXComponent(), robotVelocity.getXComponent());
+        double strafe  = clampReversePower(robotVector.getYComponent(), robotVelocity.getYComponent());
+        arcadeDrive(forward, strafe, turnPower);
     }
 
     @Deprecated

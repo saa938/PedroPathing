@@ -47,6 +47,16 @@ public abstract class Drivetrain {
     public abstract double[] calculateDrive(Vector correctivePower, Vector headingPower, Vector pathingPower, double robotHeading);
 
     /**
+     * Follows a robot-relative vector with heading correction and velocity-aware clamping.
+     * This is the Black Ice-style method that takes a single drive vector, turn power, and velocity.
+     *
+     * @param robotVector the robot-relative drive vector (already converted from field coordinates)
+     * @param turnPower the turn power for heading correction
+     * @param robotVelocity the robot-relative velocity vector for reverse power clamping
+     */
+    public abstract void followVector(Vector robotVector, double turnPower, Vector robotVelocity);
+
+    /**
      * This sets the maximum power scaling for the drivetrain. This is used to limit the maximum
      * power that can be applied to the motors, which is useful for preventing damage to the
      * drivetrain or for controlling the speed of the robot.
@@ -187,5 +197,4 @@ public abstract class Drivetrain {
      * @return this returns a String that contains the debug information for the drivetrain.
      */
     public abstract String debugString();
-
 }
