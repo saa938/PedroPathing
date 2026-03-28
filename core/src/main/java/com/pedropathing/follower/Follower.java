@@ -424,8 +424,8 @@ public class Follower {
                                 velocityDotNormal);
 
                 // cos trick
-                double cosNormal  = Math.cos(Math.min(Math.abs(normalError)  * 0.1, Math.PI / 2)); // play around with 0.1
-                double cosHeading = Math.cos(Math.min(Math.abs(headingError) * 0.1, Math.PI / 2)); // play around with 0.1 as well
+                double cosNormal  = Math.cos(Math.min(Math.abs(normalPower / PredictiveBrakingCoefficients.getP())  * 3, Math.PI / 2)); // play around with 3
+                double cosHeading = Math.cos(Math.min(Math.abs(headingPower / PredictiveBrakingCoefficients.getP()) * 4, Math.PI / 2)); // play around with 4 as well
                 double scaledTangentPower = tangentPower * cosNormal * cosHeading;
 
                 lastRawTangentPower = scaledTangentPower;
